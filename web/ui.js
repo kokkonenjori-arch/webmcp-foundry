@@ -159,8 +159,8 @@
   let stepDone = -1, running = false;
   let momentHtml = `<h2>Judge flow</h2><div class="lines">Open Ledgerly in a WebMCP-enabled browser tab (link in the header), then press Reset and run the steps in order.\nEach step waits for the browser's own getTools() report where it matters, so the registry card below is never ahead of the ledger.</div>`;
 
-  function moment(title, big, cls, lines) { momentHtml = `<h2>${esc(title)}</h2><div class="big ${cls}">${esc(big)}</div><div class="lines">${esc(lines.join('\n'))}</div>`; renderFlow(); }
-  function progress(title, lines) { momentHtml = `<h2>${esc(title)}</h2><div class="big warn">…</div><div class="lines">${esc(lines.join('\n'))}</div>`; renderFlow(); }
+  function moment(title, big, cls, lines) { momentHtml = `<h2>${esc(title)}</h2><div class="big ${cls}">${esc(big)}</div><div class="lines">${esc(lines.join('\n'))}</div>`; return renderFlow(); }
+  function progress(title, lines) { momentHtml = `<h2>${esc(title)}</h2><div class="big warn">…</div><div class="lines">${esc(lines.join('\n'))}</div>`; return renderFlow(); }
   const refusal = d => d.refusal ? d.refusal.code : '';
   const reasons = d => d.refusal ? d.refusal.reasons : [];
 
@@ -177,27 +177,27 @@
   const has = (p, name) => p.host === 'native' && (p.report.browser_tools || []).includes(name);
 
   async function stepReset() {
-    progress('Reset', ['archiving the ledger, restoring v1 handlers, re-seeding the app…']);
+    await progress('Reset', ['archiving the ledger, restoring v1 handlers, re-seeding the app…']);
     const d = await api('POST', '/api/demo/reset', {}, OWNER);
     if (!d.ok) throw new Error(refusal(d));
-    moment('Reset', 'READY', 'ok', ['ledger archived: ' + (d.detail.archived_ledger || '(none)'), 'fresh hash chain · app handlers at v1 · app state re-seeded']);
+    await moment('Reset', 'READY', 'ok', ['ledger archived: ' + (d.detail.archived_ledger || '(none)'), 'fresh hash chain · app handlers at v1 · app state re-seeded']);
   }
   async function stepDiscover() {
-    progress('Discover', ['scanning the human page…']);
+    await progress('Discover', ['scanning the human page…']);
     const d = await api('POST', '/api/discover', {}, AGENT);
     const cs = d.detail.candidates;
-    moment('Discover', cs.length + ' CANDIDATES', 'ok', cs.map(c => `${c.id.replace('ledgerly.', '')}  ${c.action.method} ${c.action.path}  ${c.fields.length} controls (${c.fields.filter(f => f.origin === 'hidden').length} hidden)`));
+    await moment('Discover', cs.length + ' CANDIDATES', 'ok', cs.map(c => `${c.id.replace('ledgerly.', '')}  ${c.action.method} ${c.action.path}  ${c.fields.length} controls (${c.fields.filter(f => f.origin === 'hidden').length} hidden)`));
   }
   async function stepMinimize() {
-    progress('Minimize', ['proposing the naive contract…']);
+    await progress('Minimize', ['proposing the naive contract…']);
     const naive = await api('POST', `/api/capabilities/${S.search}/contract`, { mode: 'naive' }, AGENT);
     const min = await api('POST', `/api/capabilities/${S.search}/contract`, { mode: 'minimize' }, AGENT);
     const m = min.detail.minimization;
-    progress('Minimize', ['naive REFUSED: ' + refusal(naive), `minimized accepted: ${m.agent_fields_before} → ${m.agent_fields_after} agent inputs`, 'verifying against the external oracle…']);
+    await progress('Minimize', ['naive REFUSED: ' + refusal(naive), `minimized accepted: ${m.agent_fields_before} → ${m.agent_fields_after} agent inputs`, 'verifying against the external oracle…']);
     const v = await api('POST', `/api/capabilities/${S.search}/verify`, {}, AGENT);
     const p = await api('POST', `/api/capabilities/${S.search}/promote`, {}, AGENT);
     const b = await waitBrowser(x => has(x, 'ledgerly_search_transactions'), 20);
-    moment('Minimize', `${m.agent_fields_before} → ${m.agent_fields_after}`, 'ok', [
+    await moment('Minimize', `${m.agent_fields_before} → ${m.agent_fields_after}`, 'ok', [
       'naive contract REFUSED · ' + refusal(naive) + ': ' + reasons(naive).slice(0, 2).join('; '),
       ...m.rows.map(r => `${r.field} (${r.origin}): ${r.after.split(' ')[0]}`),
       `evidence ${v.detail.evidence.verdict} · mutation score ${v.detail.evidence.mutation_score}`,
@@ -205,37 +205,37 @@
       b ? '✔ browser getTools() now contains ledgerly_search_transactions (native)' : '… browser report not seen (open Ledgerly in a WebMCP-enabled tab)']);
   }
   async function stepCounterexample() {
-    progress('Counterexample', ['contracting apply_adjustment (v1)…', 'probing the scope adversarially…']);
+    await progress('Counterexample', ['contracting apply_adjustment (v1)…', 'probing the scope adversarially…']);
     await api('POST', `/api/capabilities/${S.adj}/contract`, { mode: 'minimize' }, AGENT);
     const v = await api('POST', `/api/capabilities/${S.adj}/verify`, {}, AGENT);
     const sc = v.detail.evidence.checks.find(c => c.name === 'scope_adversarial');
     const p = await api('POST', `/api/capabilities/${S.adj}/promote`, {}, OWNER);
-    moment('Counterexample', sc.verdict === 'FAIL' ? 'COUNTEREXAMPLE FOUND' : 'no counterexample', sc.verdict === 'FAIL' ? 'fail' : 'warn', [
+    await moment('Counterexample', sc.verdict === 'FAIL' ? 'COUNTEREXAMPLE FOUND' : 'no counterexample', sc.verdict === 'FAIL' ? 'fail' : 'warn', [
       'effect scope: ' + sc.verdict, sc.reason, '', 'evidence verdict: ' + v.detail.evidence.verdict,
       'owner promotion: ' + (p.ok ? 'ALLOWED (unexpected)' : 'BLOCKED · ' + refusal(p))]);
   }
   async function stepRepair() {
-    progress('Repair', ['switching apply_adjustment to v2 (ownership check)…', 'rescanning dependencies…']);
+    await progress('Repair', ['switching apply_adjustment to v2 (ownership check)…', 'rescanning dependencies…']);
     await api('POST', '/api/demo/source', { name: 'apply_adjustment', version: 'v2' }, AGENT);
     const rs = await api('POST', '/api/rescan', {}, AGENT);
     const c1 = await api('GET', `/api/capabilities/${S.adj}`);
-    progress('Repair', ['rescan: ' + JSON.stringify(rs.detail.stale), 'state: ' + c1.state + ' (old evidence detached)', 're-verifying…']);
+    await progress('Repair', ['rescan: ' + JSON.stringify(rs.detail.stale), 'state: ' + c1.state + ' (old evidence detached)', 're-verifying…']);
     const v = await api('POST', `/api/capabilities/${S.adj}/verify`, {}, AGENT);
-    moment('Repair', v.detail.evidence.verdict, v.detail.evidence.verdict === 'PASS' ? 'ok' : 'fail', [
+    await moment('Repair', v.detail.evidence.verdict, v.detail.evidence.verdict === 'PASS' ? 'ok' : 'fail', [
       'source changed → capability STALE → old FAIL evidence detached (kept in the ledger)',
       'fresh evidence against v2: ' + v.detail.evidence.verdict,
       v.detail.evidence.checks.find(c => c.name === 'scope_adversarial').reason]);
   }
   async function stepAuthority() {
-    progress('Authority', ['contracting + verifying transfer_funds (FINANCIAL)…']);
+    await progress('Authority', ['contracting + verifying transfer_funds (FINANCIAL)…']);
     await api('POST', `/api/capabilities/${S.tr}/contract`, { mode: 'minimize' }, AGENT);
     const v = await api('POST', `/api/capabilities/${S.tr}/verify`, {}, AGENT);
     const pa = await api('POST', `/api/capabilities/${S.tr}/promote`, {}, AGENT);
     const pm = await api('POST', `/api/capabilities/${S.tr}/promote`, {}, MEMBER);
-    progress('Authority', ['evidence ' + v.detail.evidence.verdict, 'AGENT promotion: ' + refusal(pa), 'MEMBER promotion: ' + refusal(pm), 'owner promoting…']);
+    await progress('Authority', ['evidence ' + v.detail.evidence.verdict, 'AGENT promotion: ' + refusal(pa), 'MEMBER promotion: ' + refusal(pm), 'owner promoting…']);
     const po = await api('POST', `/api/capabilities/${S.tr}/promote`, {}, OWNER);
     const b = await waitBrowser(x => has(x, 'ledgerly_transfer_funds'), 30);
-    moment('Authority', pa.ok ? 'AGENT PROMOTED (unexpected)' : refusal(pa), pa.ok ? 'fail' : 'ok', [
+    await moment('Authority', pa.ok ? 'AGENT PROMOTED (unexpected)' : refusal(pa), pa.ok ? 'fail' : 'ok', [
       'evidence: ' + v.detail.evidence.verdict + ' (conservation, nonnegative balance, mutation score ' + v.detail.evidence.mutation_score + ')',
       'AGENT requests promotion → ' + refusal(pa) + ': ' + reasons(pa).join('; '),
       'HUMAN member → ' + refusal(pm),
@@ -243,26 +243,26 @@
       b ? `✔ NATIVE: document.modelContext.getTools() now contains ledgerly_transfer_funds (${b.report.user_agent.split(') ').pop()})` : '… native registration not observed (is Ledgerly open in a WebMCP-enabled tab?)']);
   }
   async function stepStale() {
-    progress('Source change', ['editing transfer_funds.jl (v2)…', 'rescanning…']);
+    await progress('Source change', ['editing transfer_funds.jl (v2)…', 'rescanning…']);
     await api('POST', '/api/demo/source', { name: 'transfer_funds', version: 'v2' }, AGENT);
     const rs = await api('POST', '/api/rescan', {}, AGENT);
     const c = await api('GET', `/api/capabilities/${S.tr}`);
-    progress('Source change', ['rescan: ' + JSON.stringify(rs.detail.stale), 'transfer_funds: ' + c.state, 'waiting for the browser to drop the tool…']);
+    await progress('Source change', ['rescan: ' + JSON.stringify(rs.detail.stale), 'transfer_funds: ' + c.state, 'waiting for the browser to drop the tool…']);
     const b = await waitBrowser(x => x.host === 'native' && x.matches_at_receipt === true && !(x.report.browser_tools || []).includes('ledgerly_transfer_funds'), 30);
     const inv = await api('GET', '/api/webmcp/invariant?app=ledgerly');
-    moment('Source change', 'LIVE → ' + c.state, 'warn', [
+    await moment('Source change', 'LIVE → ' + c.state, 'warn', [
       'rescan: ' + (rs.detail.stale[S.tr] || []).join('; '),
       'exposure withdrawn from the manifest · evidence detached · gateway refuses NOT_LIVE',
       b ? '✔ NATIVE: AbortController aborted → getTools() no longer contains ledgerly_transfer_funds' : '… browser withdrawal not observed',
       'lifecycle ⇔ getTools() invariant: ' + inv.verdict + ' — ' + (inv.rows || []).map(r => `${r.tool.replace('ledgerly_', '')}=${r.state}/${r.browser}`).join(', ')]);
   }
   async function stepRequalify() {
-    progress('Re-qualify', ['verifying against v2…']);
+    await progress('Re-qualify', ['verifying against v2…']);
     const v = await api('POST', `/api/capabilities/${S.tr}/verify`, {}, AGENT);
     const po = await api('POST', `/api/capabilities/${S.tr}/promote`, {}, OWNER);
     const b = await waitBrowser(x => has(x, 'ledgerly_transfer_funds'), 30);
     const lv = await api('GET', '/api/ledger/verify');
-    moment('Re-qualify', po.ok ? 'LIVE' : refusal(po), po.ok ? 'ok' : 'fail', [
+    await moment('Re-qualify', po.ok ? 'LIVE' : refusal(po), po.ok ? 'ok' : 'fail', [
       'fresh evidence: ' + v.detail.evidence.verdict, 'owner re-promotes → ' + (po.ok ? 'LIVE' : refusal(po)),
       b ? '✔ NATIVE: tool re-registered; getTools() contains ledgerly_transfer_funds again' : '… not observed',
       `ledger: chain ${lv.chain_ok ? 'intact' : 'BROKEN'} · replay ${lv.replay_matches ? 'reproduces the live digest' : 'MISMATCH'}`,
@@ -273,8 +273,8 @@
     if (running) return;
     running = true; steps[i].active = true; renderFlow();
     try { await steps[i].run(); stepDone = i; steps[i].ok = true; }
-    catch (e) { moment(steps[i].title, 'ERROR', 'fail', [String(e.message || e)]); }
-    finally { steps[i].active = false; running = false; renderFlow(); refreshList(); }
+    catch (e) { await moment(steps[i].title, 'ERROR', 'fail', [String(e.message || e)]); }
+    finally { steps[i].active = false; running = false; await renderFlow(); refreshList(); }
   }
 
   async function registryHtml() {

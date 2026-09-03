@@ -25,6 +25,12 @@ app state re-seeded, both handlers at v1).
 | 2:45 | **7 Re-qualify** | Fresh evidence PASS, owner re-promotes, the tool reappears. |
 | 3:00 | close | *Agents propose. Evidence qualifies. Authority promotes.* |
 
+Measured on the public deployment (Edge 152 native, tunnel latency included): step 3 ≈ 21 s,
+step 4 ≈ 27 s, step 5 ≈ 40 s, step 6 ≈ 29 s, step 7 ≈ 32 s; steps R–2 ≈ 45 s together. The whole
+flow runs in about four minutes of wall clock; the verification waits (adversarial probes +
+must-kill mutants against the live app) are where the time goes. For a three-minute video, cut
+the waits and keep the moment cards; the ledger sequence numbers in each card prove the order.
+
 Determinism notes
 
 * Reset archives the previous ledger (never deletes) and starts a new chain; the demo's evidence
