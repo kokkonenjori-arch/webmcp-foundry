@@ -49,6 +49,8 @@ open_tunnel() {   # $1 name  $2 local port
     [ -n "$url" ] && break; sleep 1
   done
   if [ -z "$url" ]; then log "tunnel $name: no url (see $logf)"; kill "${TPID[$name]}" 2>/dev/null; TPID[$name]=0; TURL[$name]=""; return 1; fi
+  local other; other=$([ "$name" = "foundry" ] && echo "${TURL[app]:-}" || echo "${TURL[foundry]:-}")
+  if [ "$url" = "$other" ]; then log "tunnel $name: provider reused hostname $url; retrying"; kill "${TPID[$name]}" 2>/dev/null; TPID[$name]=0; TURL[$name]=""; sleep 5; return 1; fi
   TURL[$name]=$url
   echo "$url" > "data/public-$name-url.txt"
   log "tunnel $name: $url"
@@ -60,7 +62,10 @@ tunnel_ok() {     # $1 name : process alive AND public /health answers 200
   local url=${TURL[$name]:-}
   [ "$pid" -gt 0 ] && kill -0 "$pid" 2>/dev/null || return 1
   [ -n "$url" ] || return 1
-  curl -s -m 12 -o /dev/null -w '%{http_code}' "$url/health" 2>/dev/null | grep -q '^200$'
+  # the public URL must answer /health AND be the right service (the tunnel provider can hand two
+  # tunnels the same hostname; then the later one silently serves the wrong port)
+  local want; want=$([ "$name" = "foundry" ] && echo foundry || echo ledgerly)
+  curl -s -m 12 "$url/health" 2>/dev/null | grep -q "\"service\":\"$want\""
 }
 ensure_tunnel() { # $1 name $2 port ; returns 0 if url changed
   local name=$1
