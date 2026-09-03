@@ -9,7 +9,8 @@ import ..Model: to_dict, Decision, Principal, AGENT, HUMAN, SYSTEM
 import ..Ledger
 import ..FoundryCore
 import ..FoundryCore: Foundry, principal_from_token, discover!, propose_contract!, verify!, promote!, withdraw!,
-                      rescan!, manifest, invoke!, capability_view, status, anonymous, host_report!, host_acceptance, latest_host_report, host_invariant
+                      rescan!, manifest, invoke!, capability_view, status, anonymous, host_report!, host_acceptance, latest_host_report, host_invariant,
+                      health, public_urls, reset_demo!, demo_source!
 
 export start!, WEB_DIR
 
@@ -49,6 +50,16 @@ function route(f::Foundry, req::Request)
         return static_response(joinpath(WEB_DIR, p[2:end]))
     elseif p == "/api/status"
         return reply(200, status(f))
+    elseif p == "/health"
+        h = health(f)
+        return reply(h["ok"] ? 200 : 503, h)
+    elseif p == "/api/public"
+        return reply(200, public_urls(f))
+    elseif p == "/api/demo/reset" && req.method == "POST"
+        return reply(reset_demo!(f, principal(f, req)))
+    elseif p == "/api/demo/source" && req.method == "POST"
+        b = body_json(req)
+        return reply(demo_source!(f, principal(f, req), string(get(b, "name", "")), string(get(b, "version", ""))))
     elseif p == "/api/policy"
         return reply(200, f.policy)
     elseif p == "/api/capabilities"
@@ -107,9 +118,9 @@ function route(f::Foundry, req::Request)
     elseif p == "/api/webmcp/host-report" && req.method == "POST"
         return reply(host_report!(f, principal(f, req), body_json(req)))
     elseif p == "/api/webmcp/acceptance"
-        return reply(200, host_acceptance(f, get(req.query, "app", f.app_id)))
+        return reply(200, host_acceptance(f, get(req.query, "app", f.app_id); since=parse(Int, get(req.query, "since", "0"))))
     elseif p == "/api/webmcp/invariant"
-        return reply(200, host_invariant(f, get(req.query, "app", f.app_id)))
+        return reply(200, host_invariant(f, get(req.query, "app", f.app_id); since=parse(Int, get(req.query, "since", "0"))))
     elseif p == "/api/webmcp/host-status"
         app = get(req.query, "app", f.app_id)
         ev = latest_host_report(f, app)

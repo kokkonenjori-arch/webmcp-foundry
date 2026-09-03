@@ -28,7 +28,9 @@ const DEFAULT_FLAGS = "--enable-features=WebMCPTesting,WebMCP --enable-blink-fea
 "Launch the browser detached on `url`; returns the Process (or nothing)."
 function launch_browser(exe::String, url::String)
     flags = split(get(ENV, "WEBMCP_FLAGS", DEFAULT_FLAGS))
-    profile = joinpath(tempdir(), "webmcp-acceptance-profile")
+    # a fresh profile per launch guarantees a NEW browser process (an existing instance would just
+    # open a tab, and its older pages would keep reporting with their own one-shot state)
+    profile = joinpath(tempdir(), "webmcp-acceptance-" * string(round(Int, time() * 1000)))
     args = String[exe, flags..., "--user-data-dir=$profile", "--no-first-run", "--no-default-browser-check", "--disable-gpu"]
     get(ENV, "WEBMCP_HEADLESS", "") == "1" && push!(args, "--headless=new")
     push!(args, "--new-window", url)

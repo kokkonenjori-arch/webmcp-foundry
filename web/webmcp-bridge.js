@@ -32,7 +32,7 @@
   let mc = null;
   let lastReport = null;
   let syncing = false;
-  let acceptanceDone = false;
+  let acceptanceFor = '';   // signature of the LIVE set the last acceptance run executed against
 
   // Acceptance run (?acceptance=1): for every LIVE tool, look it up through the HOST's
   // getTools() and execute it through the HOST's executeTool() with the contract's
@@ -148,7 +148,11 @@
   async function sync() {
     if (syncing) return; syncing = true;
     try {
-      if (!foundryUrl) { const cfg = await (await fetch('/api/config')).json(); foundryUrl = cfg.foundry_url; }
+      if (!foundryUrl) {
+        // an app page tells the bridge where Foundry is via /api/config; on the Foundry console itself the origin is Foundry
+        try { const r = await fetch('/api/config'); if (!r.ok) throw new Error(r.status); foundryUrl = (await r.json()).foundry_url; }
+        catch (e) { foundryUrl = location.origin; }
+      }
       const m = await (await fetch(foundryUrl + '/api/webmcp/manifest?app=' + encodeURIComponent(APP))).json();
       const want = new Map((m.tools || []).map(t => [t.name, t]));
       if (!mc) { render(null); await report(m, { browser: null, manifest: [...want.keys()], matches: null }); return; }
@@ -175,8 +179,10 @@
       const rec = await reconcile([...want.keys()]);
       render(rec);
       await report(m, rec);
-      if (params.get('acceptance') === '1' && !acceptanceDone && want.size > 0 && rec.matches !== false) {
-        acceptanceDone = true;
+      // acceptance re-runs whenever the LIVE set changes, so every promotion is also exercised natively
+      const sig = JSON.stringify([...want.keys()].sort());
+      if (params.get('acceptance') === '1' && want.size > 0 && rec.matches !== false && sig !== acceptanceFor) {
+        acceptanceFor = sig;
         await runAcceptance(m, rec, want);
       }
     } catch (e) {

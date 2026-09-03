@@ -27,7 +27,7 @@ import ..Gates: contract_gate, policy_block, promotion_gate, required_authority,
 
 export Foundry, principal_from_token, discover!, propose_contract!, verify!, promote!, withdraw!, rescan!,
        manifest, invoke!, capability_view, status, policy_hash, current_fingerprint, anonymous,
-       host_report!, host_acceptance, latest_host_report, host_invariant
+       host_report!, host_acceptance, latest_host_report, host_invariant, health, public_urls, reset_demo!, demo_source!
 
 mutable struct Foundry
     root::String
@@ -373,8 +373,9 @@ function host_report!(f::Foundry, who::Principal, report::Dict{String,Any})
     Decision(true, nothing, Dict{String,Any}("seq" => ev.seq, "matches_at_receipt" => matches, "expected_tools" => expected))
 end
 
-function latest_host_report(f::Foundry, app::String; native_only::Bool=false, with_executions::Bool=false)
+function latest_host_report(f::Foundry, app::String; native_only::Bool=false, with_executions::Bool=false, since::Int=0)
     for e in Iterators.reverse(f.store.events)
+        e.seq > since || break          # `since`: only reports recorded after a given ledger position count
         e.kind == "HOST_REPORT" || continue
         e.payload["app"] == app || continue
         native_only && e.payload["host"] != "native" && continue
@@ -394,9 +395,9 @@ Native WebMCP compliance verdict for `app`, from the ledger only:
   UNKNOWN   native host could not enumerate, or no executions were attempted
   BLOCKED   no native report at all — a polyfill or absent host is NOT evidence (named as such)
 """
-function host_acceptance(f::Foundry, app::String)
-    any_ev = latest_host_report(f, app)
-    ev = latest_host_report(f, app; native_only=true)
+function host_acceptance(f::Foundry, app::String; since::Int=0)
+    any_ev = latest_host_report(f, app; since=since)
+    ev = latest_host_report(f, app; native_only=true, since=since)
     if ev === nothing
         why = any_ev === nothing ? "no host report received for $app" :
               "latest host report is host=$(any_ev.payload["host"]) (ledger #$(any_ev.seq)); polyfill/absent hosts are not evidence of native WebMCP compliance"
@@ -412,7 +413,7 @@ function host_acceptance(f::Foundry, app::String)
         verdict = "FAIL"; push!(reasons, "browser registered set $(r["browser_tools"]) != LIVE manifest $(p["expected_tools"]) at receipt")
     end
     # executions come from the latest native report that carried an acceptance run
-    xev = latest_host_report(f, app; native_only=true, with_executions=true)
+    xev = latest_host_report(f, app; native_only=true, with_executions=true, since=since)
     execs = xev === nothing ? nothing : get(xev.payload["report"], "executions", nothing)
     if execs === nothing || isempty(execs)
         verdict == "PASS" && (verdict = "UNKNOWN")
@@ -438,8 +439,8 @@ The lifecycle ⇔ browser invariant, evaluated against the latest NATIVE host re
 Returns one row per capability with `consistent`, plus an overall verdict
 (PASS / FAIL / BLOCKED when there is no native report).
 """
-function host_invariant(f::Foundry, app::String)
-    ev = latest_host_report(f, app; native_only=true)
+function host_invariant(f::Foundry, app::String; since::Int=0)
+    ev = latest_host_report(f, app; native_only=true, since=since)
     rows = Dict{String,Any}[]
     ev === nothing && return Dict{String,Any}("verdict" => "BLOCKED", "reason" => "no native host report", "rows" => rows, "report_seq" => 0)
     browser = get(ev.payload["report"], "browser_tools", nothing)
@@ -472,6 +473,55 @@ function browser_presence(f::Foundry, cap::Capability)
                      "consistent" => isp == (cap.state == LIVE), "report_seq" => ev.seq)
 end
 
+
+# ------------------------------------------------------------------ release / operations
+
+function health(f::Foundry)
+    ok, msg = Ledger.verify_chain(f.store.events)
+    app_ok = try
+        st, _, _ = Http.request("GET", f.app_host, f.app_port, "/health"); st == 200
+    catch; false end
+    Dict{String,Any}("ok" => ok && app_ok, "service" => "foundry", "ledger_events" => length(f.store.events), "chain_ok" => ok,
+        "app_reachable" => app_ok, "live" => count(id -> f.store.capabilities[id].state == LIVE, f.store.order))
+end
+
+"Current public origins as recorded by the supervisor (empty when running locally only)."
+function public_urls(f::Foundry)
+    rd(n) = (p = joinpath(f.root, "data", n); isfile(p) ? strip(read(p, String)) : "")
+    Dict{String,Any}("foundry" => rd("public-foundry-url.txt"), "app" => rd("public-app-url.txt"))
+end
+
+"""
+    reset_demo!(f, who) — return the demonstration to its deterministic starting point.
+
+Requires a HUMAN or SYSTEM principal. Restores the app's v1 handler sources, resets app
+state, archives the current ledger file (nothing is deleted) and starts a fresh chain.
+"""
+function reset_demo!(f::Foundry, who::Principal)
+    who.kind in (HUMAN, SYSTEM) || return Decision(Refusal("AUTHORITY_INSUFFICIENT", ["only a HUMAN or SYSTEM principal may reset the demonstration"]))
+    lock(f.lock) do
+        for (n, v) in (("apply_adjustment", "v1"), ("transfer_funds", "v1"))
+            Http.request("POST", f.app_host, f.app_port, "/__oracle/source-version"; body=json(Dict("name" => n, "version" => v)), headers=["Content-Type" => "application/json"])
+        end
+        Http.request("POST", f.app_host, f.app_port, "/__oracle/reset")
+        archived = ""
+        path = f.store.path
+        if !isempty(path) && isfile(path)
+            archived = path * ".archived-" * replace(f.store.clock(), ":" => "-")
+            mv(path, archived)
+        end
+        f.store = Ledger.Store(path; clock=f.store.clock)
+        f.last_scan = Dict{String,Any}()
+        Decision(true, nothing, Dict{String,Any}("archived_ledger" => archived, "by" => pid(who)))
+    end
+end
+
+"Simulate a developer commit to the app: switch a handler to a versioned source and hot-reload it."
+function demo_source!(f::Foundry, who::Principal, name::String, version::String)
+    st, _, body = Http.request("POST", f.app_host, f.app_port, "/__oracle/source-version"; body=json(Dict("name" => name, "version" => version)), headers=["Content-Type" => "application/json"])
+    st == 200 || return Decision(Refusal("APP_UNREACHABLE", ["source switch failed: $st $body"]))
+    Decision(true, nothing, Dict{String,Any}(parse_json(body)))
+end
 
 # ------------------------------------------------------------------ views
 

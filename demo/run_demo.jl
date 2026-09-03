@@ -85,6 +85,11 @@ if !attach
                                    fresh=true, app_module=W.LedgerlyApp)
     sleep(0.3)
 end
+if attach
+    # deterministic start against a running deployment: archive the ledger, restore v1 handlers, re-seed
+    st, r = api("POST", "/api/demo/reset"; token=OWNER)
+    r["ok"] || error("demo reset refused: $(r)")
+end
 app("POST", "/__oracle/reload")
 
 say("# WebMCP Foundry — demonstration transcript")
@@ -177,7 +182,10 @@ must(props == ["amount_cents", "memo", "to_account"], "manifest tool inputSchema
 say("      description: " * tool["description"])
 exe = find_browser()
 must(!isempty(exe), "WebMCP-capable browser found: $(exe)")
-browser_proc = isempty(exe) ? nothing : launch_browser(exe, "http://127.0.0.1:$APORT/?acceptance=1")
+since8 = api("GET", "/api/status")[2]["ledger"]["events"]        # host reports must postdate the browser launch
+page = get(ENV, "WEBMCP_PAGE", "http://127.0.0.1:$APORT/")   # the public app URL exercises the judges' path
+browser_proc = isempty(exe) ? nothing : launch_browser(exe, page * "?acceptance=1")
+say("      page opened in browser: $page")
 p8 = wait_native(p -> p["matches_at_receipt"] === true && browser_has(p, "ledgerly_transfer_funds"))
 must(p8 !== nothing, "NATIVE host report: document.modelContext.getTools() == LIVE manifest, includes ledgerly_transfer_funds" *
      (p8 === nothing ? " — no native report (BLOCKED: a polyfill would not count)" : " (ledger #$(host_status()["seq"]))"))
@@ -185,10 +193,10 @@ p8 === nothing || say("      host: $(p8["report"]["user_agent"])\n      api : $(
 
 # ------------------------------------------------------------------ 9. use it
 step(9, "successfully use it through the browser's native executeTool() and through the gateway")
-st, acc = api("GET", "/api/webmcp/acceptance?app=ledgerly")
+st, acc = api("GET", "/api/webmcp/acceptance?app=ledgerly&since=$since8")
 t0 = time()
 while !(acc["verdict"] == "PASS" || (acc["verdict"] == "FAIL" && get(acc, "execution_report_seq", 0) > 0)) && time() - t0 < 45
-    sleep(1); st, acc = api("GET", "/api/webmcp/acceptance?app=ledgerly")
+    sleep(1); global acc = api("GET", "/api/webmcp/acceptance?app=ledgerly&since=$since8")[2]
 end
 must(acc["verdict"] == "PASS", "native acceptance verdict: $(acc["verdict"]) — $(join(acc["reasons"], "; "))")
 xs = get(acc, "executions", nothing)

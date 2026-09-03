@@ -1,0 +1,7 @@
+# deploy/Caddyfile — automatic HTTPS for two stable hostnames (Let's Encrypt), reverse-proxied to the container.
+foundry.example.com {
+    reverse_proxy foundry:8090
+}
+ledgerly.example.com {
+    reverse_proxy foundry:8091
+}

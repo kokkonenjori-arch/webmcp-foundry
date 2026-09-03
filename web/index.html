@@ -5,16 +5,18 @@
 <title>WebMCP Foundry</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
-  :root { --bg:#0f1214; --panel:#171b1f; --ink:#e6e6e2; --mut:#9a9f a4; --mut:#9aa0a6; --line:#2a3036; --acc:#5cc8a8; --warn:#e0645a; --amber:#e3b04b; --blue:#6aa8ff; --mono: ui-monospace, "Cascadia Mono", Consolas, monospace; }
+  :root { --bg:#0f1214; --panel:#171b1f; --ink:#e6e6e2; --mut:#9aa0a6; --line:#2a3036; --acc:#5cc8a8; --warn:#e0645a; --amber:#e3b04b; --blue:#6aa8ff; --mono: ui-monospace, "Cascadia Mono", Consolas, monospace; }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.45 system-ui, sans-serif; }
-  header { display:flex; align-items:baseline; gap:18px; padding:14px 22px; border-bottom:1px solid var(--line); background:var(--panel); position:sticky; top:0; z-index:2; }
+  header { display:flex; align-items:center; gap:14px; padding:10px 22px; border-bottom:1px solid var(--line); background:var(--panel); position:sticky; top:0; z-index:2; flex-wrap:wrap; }
   header h1 { margin:0; font-size:17px; letter-spacing:.3px; }
   header .doc { color:var(--mut); font-style:italic; }
   header .spacer { flex:1; }
-  header select, header button { font:inherit; background:#22282e; color:var(--ink); border:1px solid var(--line); border-radius:5px; padding:5px 9px; }
-  header button { cursor:pointer; }
+  header select, header button, .tab { font:inherit; background:#22282e; color:var(--ink); border:1px solid var(--line); border-radius:5px; padding:5px 9px; cursor:pointer; }
+  .tab.on { background:var(--acc); color:#06231a; border-color:transparent; }
+  #pub { width:100%; font:12px var(--mono); color:var(--mut); }
   main { display:grid; grid-template-columns: 380px 1fr; gap:0; min-height:calc(100vh - 54px); }
+  main.flow { grid-template-columns: 1fr; }
   #list { border-right:1px solid var(--line); padding:12px; overflow:auto; }
   #detail { padding:16px 22px; overflow:auto; }
   .cap { border:1px solid var(--line); border-radius:7px; padding:10px 12px; margin-bottom:8px; cursor:pointer; background:var(--panel); }
@@ -40,15 +42,31 @@
   code, pre { font-family:var(--mono); font-size:12px; }
   pre { background:#0b0e10; border:1px solid var(--line); border-radius:6px; padding:8px 10px; overflow:auto; max-height:320px; margin:6px 0; white-space:pre-wrap; }
   .actions { display:flex; flex-wrap:wrap; gap:6px; margin:10px 0; }
-  .actions button { font:inherit; padding:6px 10px; border-radius:5px; border:1px solid var(--line); background:#22282e; color:var(--ink); cursor:pointer; }
-  .actions button.primary { background:var(--acc); color:#06231a; border-color:transparent; }
+  .actions button, .step button { font:inherit; padding:6px 10px; border-radius:5px; border:1px solid var(--line); background:#22282e; color:var(--ink); cursor:pointer; }
+  .actions button.primary, .step button.primary { background:var(--acc); color:#06231a; border-color:transparent; }
   .actions button.danger { background:var(--warn); color:#fff; border-color:transparent; }
-  #log { font-family:var(--mono); font-size:12px; color:var(--mut); white-space:pre-wrap; background:#0b0e10; border:1px solid var(--line); border-radius:6px; padding:8px 10px; max-height:220px; overflow:auto; }
+  button:disabled { opacity:.4; cursor:default; }
   .refusal { border-left:3px solid var(--warn); padding:6px 10px; background:#2a1d1c; border-radius:0 6px 6px 0; margin:8px 0; }
   .ok { border-left:3px solid var(--acc); padding:6px 10px; background:#16281f; border-radius:0 6px 6px 0; margin:8px 0; }
   .hist { font-family:var(--mono); font-size:11.5px; color:var(--mut); }
   details summary { cursor:pointer; color:var(--blue); }
   .ledger-row td { font-family:var(--mono); font-size:11.5px; }
+  /* judge flow */
+  #flow { display:grid; grid-template-columns: 340px 1fr; gap:18px; padding:18px 22px; }
+  .step { display:flex; align-items:center; gap:10px; padding:9px 10px; border:1px solid var(--line); border-radius:7px; background:var(--panel); margin-bottom:7px; }
+  .step .n { font:600 13px var(--mono); color:var(--mut); width:18px; }
+  .step .title { flex:1; }
+  .step .done { color:var(--acc); font-family:var(--mono); font-size:12px; }
+  .step.active { outline:2px solid var(--acc); }
+  #moment { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:18px 22px; min-height:200px; }
+  #moment h2 { font-size:22px; margin:0 0 8px; }
+  #moment .big { font:700 34px/1.1 var(--mono); margin:8px 0 12px; }
+  #moment .big.fail { color:var(--warn); } #moment .big.ok { color:var(--acc); } #moment .big.warn { color:var(--amber); }
+  #moment .lines { font-family:var(--mono); font-size:13px; color:var(--mut); white-space:pre-wrap; }
+  #registry { margin-top:14px; }
+  #registry .tools { font-family:var(--mono); font-size:13px; }
+  #registry .present { color:var(--acc); } #registry .absent { color:var(--mut); }
+  .host-native { color:var(--acc); } .host-polyfill, .host-none { color:var(--warn); }
   #webmcp-self { color:var(--mut); font-size:12px; }
 </style>
 </head>
@@ -57,6 +75,9 @@
   <h1>WebMCP Foundry</h1>
   <span class="doc">Agents propose. Evidence qualifies. Authority promotes.</span>
   <span class="spacer"></span>
+  <span class="tab on" data-view="flow">Judge flow</span>
+  <span class="tab" data-view="caps">Capabilities</span>
+  <span class="tab" data-view="ledger">Ledger</span>
   <label>acting as
     <select id="who">
       <option value="tok-agent-planner">AGENT planner</option>
@@ -67,13 +88,14 @@
   </label>
   <button id="discover">Discover</button>
   <button id="rescan">Rescan dependencies</button>
-  <button id="ledger-btn">Ledger</button>
   <span id="webmcp-self"></span>
+  <div id="pub"></div>
 </header>
 <div id="webmcp-status" style="display:none"></div><div id="webmcp-tools" style="display:none"></div>
-<main>
-  <div id="list"></div>
-  <div id="detail"><p style="color:var(--mut)">Select a capability, or press <b>Discover</b> to scan the app.</p></div>
+<main class="flow">
+  <div id="flow"></div>
+  <div id="list" style="display:none"></div>
+  <div id="detail" style="display:none"><p style="color:var(--mut)">Select a capability, or press <b>Discover</b> to scan the app.</p></div>
 </main>
 <script src="/ui.js"></script>
 <script src="/webmcp-bridge.js" data-app="foundry" data-token="tok-agent-planner"></script>

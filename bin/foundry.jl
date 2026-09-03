@@ -19,6 +19,9 @@ for (i, a) in enumerate(ARGS)
     a == "--foundry-url" && (global furl = ARGS[i+1])     # public origin the app page should use (tunnel/deploy)
 end
 
+# under the supervisor the public Foundry origin is recorded on disk; adopt it so a restart is consistent without a push
+pubfile = joinpath(ROOT, "data", "public-foundry-url.txt")
+isempty(furl) && isfile(pubfile) && (global furl = strip(read(pubfile, String)))
 f, srv, app = WebMCPFoundry.boot(; foundry_port=fport, app_port=aport, fresh=fresh, app_module=WebMCPFoundry.LedgerlyApp,
                                  foundry_url=isempty(furl) ? nothing : furl)
 isempty(furl) || println("app page will use Foundry at : $furl")

@@ -11,8 +11,8 @@
 #      deterministic state snapshot and reset. Foundry NEVER calls handlers in
 #      process; everything crosses TCP.
 #
-# The page also loads /webmcp-bridge.js, which registers navigator.modelContext
-# tools from Foundry's manifest of LIVE capabilities — nothing else.
+# The page also loads /webmcp-bridge.js (Foundry's client artifact), which registers
+# tools on document.modelContext from Foundry's manifest of LIVE capabilities — nothing else.
 
 module LedgerlyApp
 
@@ -124,6 +124,10 @@ function handle(req::Request)
         return static_response(joinpath(APP_DIR, "app.js"))
     elseif p == "/api/config"
         return json_response(200, json(Dict("foundry_url" => FOUNDRY_URL[], "app" => "ledgerly")))
+    elseif p == "/health"
+        r = json_response(200, json(Dict("ok" => true, "service" => "ledgerly", "oracle" => ORACLE[], "foundry_url" => FOUNDRY_URL[])))
+        push!(r.headers, "Access-Control-Allow-Origin" => "*")
+        return r
     elseif p == "/api/me"
         u = session_user(req)
         u === nothing && return json_response(401, json(Dict("error" => "no session")))
@@ -155,6 +159,21 @@ function handle(req::Request)
             load_actions!(); return json_response(200, json(Dict("ok" => true, "sources" => sources())))
         elseif sub == "sources"
             return json_response(200, canonical(sources()))
+        elseif sub == "config" && req.method == "POST"
+            # the public origin of Foundry can change at runtime (tunnel rotation); the supervisor updates it here
+            d = parse_json(String(copy(req.body)))
+            haskey(d, "foundry_url") && (FOUNDRY_URL[] = String(d["foundry_url"]))
+            return json_response(200, json(Dict("ok" => true, "foundry_url" => FOUNDRY_URL[])))
+        elseif sub == "source-version" && req.method == "POST"
+            # simulate a developer commit: swap a handler between its versioned sources and hot-reload
+            d = parse_json(String(copy(req.body)))
+            name = String(get(d, "name", "")); ver = String(get(d, "version", ""))
+            name in ACTION_NAMES || return json_response(404, json(Dict("error" => "unknown action")))
+            src = joinpath(ACTIONS_DIR, "$name.$ver.jl")
+            isfile(src) || return json_response(404, json(Dict("error" => "unknown version $ver for $name")))
+            cp(src, joinpath(ACTIONS_DIR, name * ".jl"); force=true)
+            load_actions!()
+            return json_response(200, json(Dict("ok" => true, "name" => name, "version" => ver, "digest" => source_digest(name))))
         elseif startswith(sub, "source/")
             n = sub[length("source/")+1:end]
             n in ACTION_NAMES || return text_response(404, "no such action")

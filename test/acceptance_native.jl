@@ -54,6 +54,8 @@ if !attach
     api("POST", "/api/capabilities/ledgerly.search_transactions/promote"; token="tok-agent-planner")
 end
 
+# only host reports recorded AFTER this point count: evidence must postdate the question
+since = api("GET", "/api/status")[2]["ledger"]["events"]
 exe = find_browser()
 url = get(ENV, "WEBMCP_PAGE", "http://127.0.0.1:$APORT/") * "?acceptance=1"   # WEBMCP_PAGE: e.g. the public tunnel URL of the app
 println("native WebMCP acceptance")
@@ -70,7 +72,7 @@ deadline = time() + timeout
 verdict = Dict{String,Any}("verdict" => "BLOCKED", "reasons" => ["no report before timeout"])
 seen_seq = 0
 while time() < deadline
-    st, v = api("GET", "/api/webmcp/acceptance?app=ledgerly")
+    st, v = api("GET", "/api/webmcp/acceptance?app=ledgerly&since=$since")
     global verdict = v
     # final only when the acceptance run (executions) has been graded; transient FAILs may precede it
     v["verdict"] == "PASS" && break
@@ -93,7 +95,7 @@ if verdict["verdict"] in ("PASS", "FAIL", "UNKNOWN")
     println("  browser   : $(json(get(verdict, "browser_tools", nothing)))  expected: $(json(get(verdict, "expected_tools", nothing)))")
     println("  executions: $(json(get(verdict, "executions", nothing)))")
 end
-st, inv = api("GET", "/api/webmcp/invariant?app=ledgerly")
+st, inv = api("GET", "/api/webmcp/invariant?app=ledgerly&since=$since")
 println("
 LIFECYCLE ⇔ getTools() INVARIANT: $(inv["verdict"])")
 for r in get(inv, "rows", []); println("  $(rpad(r["tool"], 32)) $(rpad(r["state"], 10)) expected=$(r["expected"]) browser=$(r["browser"]) $(r["consistent"] ? "✔" : "✘")"); end

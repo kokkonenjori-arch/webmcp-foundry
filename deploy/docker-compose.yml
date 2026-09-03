@@ -1,0 +1,23 @@
+# deploy/docker-compose.yml — stable HTTPS deployment on any VPS with ports 80/443 open.
+#   1. point two DNS A records at the VPS (foundry.example.com, ledgerly.example.com)
+#   2. edit the hostnames in Caddyfile and FOUNDRY_URL below
+#   3. docker compose -f deploy/docker-compose.yml up -d --build
+services:
+  foundry:
+    build: { context: .., dockerfile: deploy/Dockerfile }
+    environment:
+      FOUNDRY_URL: https://foundry.example.com
+    volumes:
+      - foundry-data:/srv/webmcp-foundry/data      # the ledger survives restarts (replayed + chain-verified on boot)
+    restart: unless-stopped
+  caddy:
+    image: caddy:2
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    restart: unless-stopped
+    depends_on: [foundry]
+volumes:
+  foundry-data: {}
+  caddy-data: {}

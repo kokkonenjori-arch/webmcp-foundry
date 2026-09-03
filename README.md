@@ -20,7 +20,14 @@ human web action → candidate → contract → minimized agent inputs → effec
 
 License: MIT. Standard library only (Sockets, SHA, Dates); nothing to install beyond Julia ≥ 1.10.
 
-## Try it
+## Live
+
+**Stable entry page: https://kokkonenjori-arch.github.io/webmcp-foundry/** — always links to the
+currently live Foundry console and Ledgerly app (the supervisor republishes it when an origin
+changes). The console's **Judge flow** tab runs the demonstration below step by step; see
+[docs/DEMO-SCRIPT.md](docs/DEMO-SCRIPT.md) for the three-minute path.
+
+## Try it locally
 
 ```bash
 julia bin/foundry.jl --fresh        # Foundry console http://127.0.0.1:8090 · Ledgerly app http://127.0.0.1:8091
@@ -97,19 +104,20 @@ Also exercised: `delete_account` (DESTRUCTIVE, human-only confirm) is `NOT_AGENT
 boundary, and UNGRADABLE is not PASS; `add_note` (WRITE_OWN) cannot be promoted by an agent.
 Finally the hash chain is verified and `data/ledger.jsonl` is replayed to the same digest.
 
-## Public deployment
+## Deployment and health
 
-`bin/tunnel.sh` publishes both servers on public HTTPS URLs through an install-free, keyless
-`localhost.run` SSH tunnel and starts Foundry with the app page pointed at the public Foundry
-origin (WebMCP needs a secure context; the tunnel terminates TLS):
+Two modes, both documented in [deploy/README.md](deploy/README.md):
 
-```bash
-bash bin/tunnel.sh
-```
+* **VPS with fixed hostnames** (`deploy/docker-compose.yml` + Caddy automatic HTTPS): the
+  recommended permanent home.
+* **Supervised tunnels from a workstation** (`bin/serve_public.sh`): keeps the Julia process and
+  two HTTPS tunnels alive, restarts whatever dies, keeps the app pointed at the current public
+  Foundry origin, and republishes the stable entry page. `bin/install_autostart.ps1` registers it
+  at logon.
 
-Keyless tunnels get a fresh `*.lhr.life` hostname per run and live while the script runs; for a
-stable hostname register a key (see the script header). Any host that can run Julia and expose
-two ports works the same way: `julia bin/foundry.jl --foundry-url https://<public-foundry-origin>`.
+`bash bin/healthcheck.sh` probes both public origins (`/health`, manifest with CORS, app→Foundry
+config consistency). Each server also answers `/health` for load balancers. On boot the Foundry
+replays its ledger and refuses to start on a broken chain.
 
 ## Layout
 
