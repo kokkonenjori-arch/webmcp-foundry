@@ -5,3 +5,6 @@ data/*
 demo/app/actions/apply_adjustment.jl
 demo/app/actions/transfer_funds.jl
 *.tmp
+media/frames/
+media/frames.json
+media/key-*.png
