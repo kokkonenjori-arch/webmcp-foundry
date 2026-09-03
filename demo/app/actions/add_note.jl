@@ -1,0 +1,15 @@
+# add_note — WRITE_OWN. Attaches a note to one of the caller's accounts.
+function handle_add_note(st::AppState, user::String, input::Dict{String,String})
+    account = get(input, "account_id", "")
+    text = strip(get(input, "text", ""))
+    isempty(text) && return (422, Dict("error" => "text required"))
+    length(text) > 280 && return (422, Dict("error" => "text too long"))
+    haskey(st.accounts, account) || return (404, Dict("error" => "unknown account"))
+    st.accounts[account]["owner"] == user || return (403, Dict("error" => "not your account"))
+    pinned = get(input, "pinned", "0") in ("1", "true", "on")
+    author = get(input, "author", user)
+    note = Dict{String,Any}("id" => newid!(st, "N"), "text" => String(text), "pinned" => pinned, "author" => author)
+    push!(st.accounts[account]["notes"], note)
+    push!(st.audit, "$user added note to $account")
+    (201, Dict("note" => note))
+end

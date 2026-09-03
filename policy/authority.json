@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "doctrine": "Agents propose. Evidence qualifies. Authority promotes.",
+  "promotion": {
+    "READ":          {"min_actor": "AGENT",     "roles": [],        "separation": false},
+    "WRITE_OWN":     {"min_actor": "HUMAN",     "roles": [],        "separation": false},
+    "WRITE_OTHER":   {"min_actor": "FORBIDDEN", "roles": [],        "separation": true},
+    "FINANCIAL":     {"min_actor": "HUMAN",     "roles": ["owner"], "separation": true},
+    "EXTERNAL_SEND": {"min_actor": "HUMAN",     "roles": ["owner"], "separation": true},
+    "DESTRUCTIVE":   {"min_actor": "FORBIDDEN", "roles": [],        "separation": true}
+  },
+  "contract_rules": {
+    "hidden_fields_may_be_agent_bound": false,
+    "identity_field_pattern": "(^|_)(author|user|owner|session)($|_)",
+    "resource_selector_pattern": "(^|_)(account_id|from_account|to_account)($|_)",
+    "scope_field_pattern": "(^|_)(account_id|from_account)($|_)",
+    "max_agent_fields": 4,
+    "require_constraints": true,
+    "max_string_length": 280
+  },
+  "evidence": {
+    "require_mutation_score": 1.0,
+    "required_checks": ["oracle_available", "unauthenticated_refused", "nominal_within_bound",
+                        "constraint_boundary", "scope_adversarial", "unknown_fields_rejected",
+                        "invariant:no_effect_on_rejection", "invariant:hidden_not_agent"]
+  }
+}

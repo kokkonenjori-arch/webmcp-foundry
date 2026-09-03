@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Ledgerly</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --bg:#f7f7f4; --ink:#1c1c1a; --mut:#6b6b66; --line:#dcdcd6; --acc:#0f6b5c; --warn:#a33; --card:#fff; }
+  body { margin:0; font:15px/1.45 system-ui, sans-serif; background:var(--bg); color:var(--ink); }
+  header { padding:18px 28px; border-bottom:1px solid var(--line); background:var(--card); display:flex; gap:16px; align-items:baseline; }
+  header h1 { margin:0; font-size:20px; }
+  header .who { color:var(--mut); }
+  main { max-width:1080px; margin:0 auto; padding:24px 28px; display:grid; grid-template-columns:1fr 1fr; gap:20px; }
+  section { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:16px 18px; }
+  h2 { margin:0 0 10px; font-size:15px; }
+  form { display:grid; gap:8px; }
+  label { display:grid; gap:3px; font-size:13px; color:var(--mut); }
+  input, select, textarea { font:inherit; padding:6px 8px; border:1px solid var(--line); border-radius:5px; }
+  button { font:inherit; padding:7px 12px; border:0; border-radius:5px; background:var(--acc); color:#fff; cursor:pointer; justify-self:start; }
+  button.danger { background:var(--warn); }
+  .out { font:12px/1.4 ui-monospace, monospace; white-space:pre-wrap; color:var(--mut); margin-top:6px; min-height:1em; }
+  #accounts { grid-column:1 / -1; }
+  table { border-collapse:collapse; width:100%; font-size:13px; }
+  td, th { text-align:left; padding:4px 6px; border-bottom:1px solid var(--line); }
+  #webmcp { grid-column:1 / -1; background:#eef5f3; }
+  #webmcp code { background:#fff; padding:1px 4px; border-radius:3px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Ledgerly</h1>
+  <span class="who">signed in as <b id="me">…</b></span>
+</header>
+<main>
+  <section id="accounts">
+    <h2>Accounts</h2>
+    <table><thead><tr><th>Account</th><th>Owner</th><th>Balance</th><th>Notes</th></tr></thead><tbody id="acct-rows"></tbody></table>
+  </section>
+
+  <section>
+    <h2>Search transactions</h2>
+    <form data-action="search_transactions" data-effect="READ" method="get" action="/actions/search_transactions">
+      <label>Search text <input name="q" type="text" placeholder="memo contains…"></label>
+      <label>Limit <input name="limit" type="number" min="1" max="100" value="20"></label>
+      <input type="hidden" name="account_id" value="A1">
+      <input type="hidden" name="include_all_accounts" value="0">
+      <button>Search</button>
+      <div class="out"></div>
+    </form>
+  </section>
+
+  <section>
+    <h2>Add note</h2>
+    <form data-action="add_note" data-effect="WRITE_OWN" method="post" action="/actions/add_note">
+      <input type="hidden" name="account_id" value="A1">
+      <label>Note <textarea name="text" maxlength="280" required rows="2"></textarea></label>
+      <label><input name="pinned" type="checkbox" value="1"> Pinned</label>
+      <input type="hidden" name="author" value="jori">
+      <button>Add note</button>
+      <div class="out"></div>
+    </form>
+  </section>
+
+  <section>
+    <h2>Apply adjustment</h2>
+    <form data-action="apply_adjustment" data-effect="FINANCIAL" data-scope="own_account" method="post" action="/actions/apply_adjustment">
+      <label>Account
+        <select name="account_id">
+          <option value="A1">A1 · Jori · Operating</option>
+          <option value="A2">A2 · Sam · Travel</option>
+          <option value="A3">A3 · Jori · Reserve</option>
+        </select>
+      </label>
+      <label>Amount (cents, ± ) <input name="amount_cents" type="number" min="-100000" max="100000" required value="-500"></label>
+      <label>Reason <input name="reason" type="text" maxlength="80" required value="receipt correction"></label>
+      <button>Apply</button>
+      <div class="out"></div>
+    </form>
+  </section>
+
+  <section>
+    <h2>Transfer funds</h2>
+    <form data-action="transfer_funds" data-effect="FINANCIAL" data-scope="own_account" data-invariants="conservation" method="post" action="/actions/transfer_funds">
+      <input type="hidden" name="from_account" value="A1">
+      <label>To
+        <select name="to_account">
+          <option value="A3">A3 · Jori · Reserve</option>
+          <option value="A2">A2 · Sam · Travel</option>
+        </select>
+      </label>
+      <label>Amount (cents) <input name="amount_cents" type="number" min="1" max="25000" required value="1500"></label>
+      <label>Memo <input name="memo" type="text" maxlength="120" value="reimbursement"></label>
+      <button>Transfer</button>
+      <div class="out"></div>
+    </form>
+  </section>
+
+  <section>
+    <h2>Delete account</h2>
+    <form data-action="delete_account" data-effect="DESTRUCTIVE" method="post" action="/actions/delete_account">
+      <label>Account <select name="account_id"><option value="A3">A3 · Jori · Reserve</option><option value="A1">A1 · Jori · Operating</option></select></label>
+      <label>Type DELETE to confirm <input name="confirm" type="text" data-human-only="true" required></label>
+      <button class="danger">Delete</button>
+      <div class="out"></div>
+    </form>
+  </section>
+
+  <section>
+    <h2>Share report</h2>
+    <form data-action="share_report" data-effect="EXTERNAL_SEND" method="post" action="/actions/share_report">
+      <label>Recipient email <input name="recipient_email" type="email" required value="accountant@example.com"></label>
+      <label>Period <select name="period"><option value="month">Month</option><option value="quarter">Quarter</option></select></label>
+      <button>Send</button>
+      <div class="out"></div>
+    </form>
+  </section>
+
+  <section id="webmcp">
+    <h2>Agent interface (WebMCP)</h2>
+    <div id="webmcp-status">bridge starting…</div>
+    <div id="webmcp-acceptance" class="out"></div>
+    <div class="out" id="webmcp-tools"></div>
+  </section>
+</main>
+<script src="/app.js"></script>
+<script src="/webmcp-bridge.js" data-app="ledgerly"></script>
+</body>
+</html>

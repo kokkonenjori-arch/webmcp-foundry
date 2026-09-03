@@ -1,0 +1,9 @@
+{
+  "tokens": {
+    "tok-human-jori":    {"kind": "HUMAN",  "id": "jori",     "roles": ["owner"]},
+    "tok-human-sam":     {"kind": "HUMAN",  "id": "sam",      "roles": ["member"]},
+    "tok-agent-planner": {"kind": "AGENT",  "id": "planner",  "roles": []},
+    "tok-agent-browser": {"kind": "AGENT",  "id": "browser",  "roles": []},
+    "tok-system":        {"kind": "SYSTEM", "id": "foundry",  "roles": []}
+  }
+}
