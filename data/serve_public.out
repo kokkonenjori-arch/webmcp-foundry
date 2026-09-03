@@ -1,8 +1,0 @@
-2026-09-03T00:52:36Z starting julia server
-2026-09-03T00:52:45Z server up
-2026-09-03T00:52:45Z tunnel foundry unhealthy; reopening
-2026-09-03T00:52:47Z tunnel foundry: https://cfbcc148895258.lhr.life
-2026-09-03T00:52:47Z tunnel app unhealthy; reopening
-2026-09-03T00:52:49Z tunnel app: https://b9fb37df9fd4a1.lhr.life
-2026-09-03T00:52:51Z entry page updated: {"foundry":"https://cfbcc148895258.lhr.life","app":"https://b9fb37df9fd4a1.lhr.life","updated":"2026-09-03T00:52:49Z","mode":"supervised-tunnel"}
-2026-09-03T00:52:51Z LIVE  console=https://cfbcc148895258.lhr.life  app=https://b9fb37df9fd4a1.lhr.life
