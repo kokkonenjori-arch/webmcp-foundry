@@ -65,18 +65,31 @@ ledger**, from reports the page's bridge posts about the host it runs on:
 | UNKNOWN | native host could not enumerate / no executions |
 | BLOCKED | no native report — a polyfill or absent host is named and **not counted** |
 
-Last verified run: Edge 152 (Chromium 152) with the WebMCP testing feature — native, four API
-members present (`registerTool`, `getTools`, `executeTool`, `toolchange`), **native WebMCP
-integration PASS**. This is not a claim of WebMCP specification conformance for the browser:
-a host compatibility quirk was observed and recorded in the evidence rather than hidden. The
-specification's WebIDL makes the object form of `executeTool()` input normative; this Edge
-build rejected the object form and required serialized JSON. The bridge tries the normative
-form first, falls back, and records `input_encoding` and the host's error in the ledger.
+### Tested browsers
+
+| Browser | Version | Host | Result (against the public deployment) |
+|---|---|---|---|
+| **Google Chrome** | 152.0.7977.76 (stable, WebMCP testing features enabled) | native `document.modelContext` | acceptance PASS; invariant PASS; full demo: LIVE → STALE withdraws the tool natively, re-qualification re-registers it |
+| **Microsoft Edge** | 152.0.4191.53 (WebMCP testing features enabled) | native `document.modelContext` | acceptance PASS; invariant PASS; full demo holds |
+
+Both runs verified, from the ledger: native `document.modelContext` present; `registerTool()`,
+`getTools()`, `executeTool()` and `toolchange` present; `getTools()` exactly equal to the LIVE
+manifest; two native `executeTool()` executions succeeded; LIVE ⇔ present invariant; LIVE → STALE
+caused native withdrawal; re-qualification caused re-registration. Enable the feature in Chrome
+via `chrome://flags/#enable-webmcp-testing` or launch with
+`--enable-features=WebMCPTesting,WebMCP --enable-blink-features=WebMCPTesting,WebMCP`.
+
+This is **native WebMCP integration PASS**, not a claim of WebMCP specification conformance for
+the browsers: one host compatibility quirk was observed and recorded in the evidence rather than
+hidden. The specification's WebIDL makes the object form of `executeTool()` input normative;
+both Chromium 152 builds (Chrome and Edge) rejected the object form and required serialized
+JSON. The bridge tries the normative form first, falls back, and records `input_encoding` and
+the host's error in the ledger.
 
 | | `executeTool()` input |
 |---|---|
 | Expected by the current specification | object |
-| Observed in this native implementation | object rejected, serialized JSON accepted |
+| Observed in Chromium 152 (Chrome, Edge) | object rejected, serialized JSON accepted |
 | Foundry | recorded the disagreement as evidence |
 
 ## What the demonstration shows
