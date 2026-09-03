@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>WebMCP Foundry — live entry</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body { margin:0; background:#0f1214; color:#e6e6e2; font:16px/1.5 system-ui, sans-serif; }
+  main { max-width:760px; margin:0 auto; padding:48px 24px; }
+  h1 { font-size:26px; margin:0 0 4px; } .doc { color:#9aa0a6; font-style:italic; margin:0 0 28px; }
+  .btn { display:block; padding:16px 20px; margin:12px 0; border-radius:10px; background:#171b1f; border:1px solid #2a3036; color:#e6e6e2; text-decoration:none; }
+  .btn b { display:block; font-size:18px; color:#5cc8a8; } .btn span { color:#9aa0a6; font-size:14px; word-break:break-all; }
+  .st { font:13px ui-monospace, monospace; color:#9aa0a6; margin-top:6px; } .ok { color:#5cc8a8; } .bad { color:#e0645a; }
+  .box { background:#171b1f; border:1px solid #2a3036; border-radius:10px; padding:14px 18px; margin-top:24px; font-size:14px; }
+  code { font-family: ui-monospace, monospace; background:#0b0e10; padding:1px 5px; border-radius:4px; }
+  a { color:#6aa8ff; }
+</style>
+</head>
+<body>
+<main>
+  <h1>WebMCP Foundry</h1>
+  <p class="doc">Agents propose. Evidence qualifies. Authority promotes.</p>
+  <p>This page is the <b>stable entry point</b>. It always links to the currently live deployment (updated automatically by the supervisor).</p>
+  <a class="btn" id="foundry" href="#"><b>Open the Foundry console</b><span>…</span><div class="st" id="fst">checking…</div></a>
+  <a class="btn" id="app" href="#"><b>Open Ledgerly (the app whose page registers WebMCP tools)</b><span>…</span><div class="st" id="ast">checking…</div></a>
+  <div class="st" id="updated"></div>
+  <div class="box">
+    <b>To see native WebMCP</b>: open Ledgerly in Chrome 149+ with <code>chrome://flags/#enable-webmcp-testing</code> enabled
+    (or Chromium/Edge started with <code>--enable-features=WebMCPTesting,WebMCP --enable-blink-features=WebMCPTesting,WebMCP</code>),
+    or in the ChatGPT in-app browser. The page's "Agent interface" panel names the host class it detected; the console's
+    <b>Judge flow</b> tab runs the ten-step demonstration and shows the browser's registered tool set live.
+    <br><br>Source and instructions: <a href="https://github.com/kokkonenjori-arch/webmcp-foundry">github.com/kokkonenjori-arch/webmcp-foundry</a>
+  </div>
+</main>
+<script>
+(async () => {
+  const set = (id, url) => { const a = document.getElementById(id); a.href = url; a.querySelector('span').textContent = url; };
+  const probe = async (id, url) => {
+    const el = document.getElementById(id);
+    try { const r = await fetch(url + '/health', { cache: 'no-store' }); const j = await r.json();
+      el.innerHTML = r.ok ? '<span class="ok">reachable</span> · ' + JSON.stringify(j) : '<span class="bad">HTTP ' + r.status + '</span>'; }
+    catch (e) { el.innerHTML = '<span class="bad">unreachable</span> — the supervisor republishes this page when the origin changes; retry in a minute'; }
+  };
+  try {
+    const live = await (await fetch('live.json?ts=' + Date.now(), { cache: 'no-store' })).json();
+    set('foundry', live.foundry); set('app', live.app);
+    document.getElementById('updated').textContent = 'live.json updated ' + live.updated + ' · mode ' + live.mode;
+    probe('fst', live.foundry); probe('ast', live.app);
+  } catch (e) { document.getElementById('updated').textContent = 'live.json unavailable: ' + e.message; }
+})();
+</script>
+</body>
+</html>
