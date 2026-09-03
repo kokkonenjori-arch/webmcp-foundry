@@ -24,10 +24,12 @@ import ..Validate: bind_input, input_schema
 import ..Verify
 import ..Verify: Target, verify_capability, TESTS_HASH
 import ..Gates: contract_gate, policy_block, promotion_gate, required_authority, staleness
+import ..Budget: budget_check, budget_usage
+import ..Verify
 
 export Foundry, principal_from_token, discover!, propose_contract!, verify!, promote!, withdraw!, rescan!,
        manifest, invoke!, capability_view, status, policy_hash, current_fingerprint, anonymous,
-       host_report!, host_acceptance, latest_host_report, host_invariant, health, public_urls, reset_demo!, demo_source!
+       host_report!, host_acceptance, latest_host_report, host_invariant, health, public_urls, reset_demo!, demo_source!, impact, deps_graph, guidance, explain_refusal
 
 mutable struct Foundry
     root::String
@@ -42,6 +44,7 @@ mutable struct Foundry
     verify_session::String
     lock::ReentrantLock
     last_scan::Dict{String,Any}
+    deps::Dict{String,Any}           # app-declared source dependencies: source_ref -> [refs]
 end
 
 function Foundry(root::String; store::Store, app_id="ledgerly", app_host="127.0.0.1", app_port=8091,
@@ -50,7 +53,7 @@ function Foundry(root::String; store::Store, app_id="ledgerly", app_host="127.0.
     policy = Dict{String,Any}(parse_json(String(copy(pbytes))))
     principals = Dict{String,Any}(parse_json(read(joinpath(root, "policy", "principals.json"), String)))
     Foundry(root, store, policy, pbytes, principals, app_id, app_host, app_port, app_page, verify_session,
-            ReentrantLock(), Dict{String,Any}())
+            ReentrantLock(), Dict{String,Any}(), Dict{String,Any}())
 end
 
 policy_hash(f::Foundry) = sha(f.policy_bytes)
@@ -76,9 +79,20 @@ function app_sources(f::Foundry)
     Dict{String,Any}(parse_json(body))
 end
 
-"Current dependency fingerprint for a capability (given the contract hash to bind)."
+function app_deps!(f::Foundry)
+    st, _, body = app_get(f, "/__oracle/deps")
+    st == 200 && (f.deps = Dict{String,Any}(parse_json(body)))
+    f.deps
+end
+
+"All source artifacts a capability depends on (its own handler plus app-declared shared sources)."
+source_refs(f::Foundry, cap::Capability) = String[string(x) for x in get(f.deps, cap.candidate.action.source_ref, Any[cap.candidate.action.source_ref])]
+
+"Current dependency fingerprint for a capability. `source` covers the WHOLE dependency set, so a shared helper change moves every dependent."
 function current_fingerprint(f::Foundry, cap::Capability, chash::String; sources=app_sources(f), surface=cap.candidate.surface_hash)
-    src = get(sources, cap.candidate.action.source_ref, "sha256:unavailable")
+    refs = source_refs(f, cap)
+    digests = Dict{String,Any}(r => get(sources, r, "sha256:unavailable") for r in refs)
+    src = length(refs) == 1 ? string(digests[refs[1]]) : sha(canonical(digests))
     Fingerprint(src, surface, policy_hash(f), TESTS_HASH, chash)
 end
 
@@ -89,6 +103,7 @@ function discover!(f::Foundry, who::Principal)
     lock(f.lock) do
         st, _, html = app_get(f, f.app_page)
         st == 200 || return Decision(Refusal("APP_UNREACHABLE", ["GET $(f.app_page) -> $st"]))
+        app_deps!(f)
         srcmap = Dict{String,String}()
         for (ref, _) in app_sources(f)
             name = replace(basename(ref), ".jl" => "")
@@ -134,7 +149,7 @@ function propose_contract!(f::Foundry, who::Principal, cap_id::String; mode::Str
                 return Decision(Refusal("SCHEMA_INVALID", [sprint(showerror, e)]))
             end
         end
-        k = Contract(k.capability_id, version, k.description, k.inputs, k.effects, k.scope, k.scope_field, k.invariants, k.nominal_input, pid(who))
+        k = Contract(k.capability_id, version, k.description, k.inputs, k.effects, k.scope, k.scope_field, k.invariants, k.nominal_input, pid(who), k.budget)
         dec = contract_gate(k, cap.candidate, f.policy)
         if !dec.ok
             commit!(f.store, "CONTRACT_REFUSED", pid(who), Dict{String,Any}("capability_id" => cap_id, "contract" => to_dict(k), "refusal" => to_dict(dec.refusal)))
@@ -189,7 +204,7 @@ function promote!(f::Foundry, who::Principal, cap_id::String)
         dec = fp_now === nothing ? Decision(Refusal("NOT_VERIFIED", ["no contract"])) : promotion_gate(cap, who, ev, fp_now, f.policy)
         if !dec.ok
             commit!(f.store, "PROMOTION_REFUSED", pid(who), Dict{String,Any}("capability_id" => cap_id, "by" => pid(who), "refusal" => to_dict(dec.refusal)))
-            return dec
+            return Decision(false, dec.refusal, Dict{String,Any}("guidance" => guidance(dec.refusal.code, dec.refusal.reasons; capability_id=cap_id, state=string(cap.state))))
         end
         commit!(f.store, "PROMOTED", pid(who), Dict{String,Any}("capability_id" => cap_id, "by" => pid(who), "evidence_id" => ev.id,
             "fingerprint_hash" => fingerprint_hash(fp_now), "rule" => dec.detail["rule"]))
@@ -219,6 +234,7 @@ function rescan!(f::Foundry, who::Principal)
         st, _, html = app_get(f, f.app_page)
         st == 200 || return Decision(Refusal("APP_UNREACHABLE", ["GET $(f.app_page) -> $st"]))
         sources = app_sources(f)
+        app_deps!(f)
         srcmap = Dict{String,String}(replace(basename(r), ".jl" => "") => r for (r, _) in sources)
         cands = Dict(c.id => c for c in discover_forms(html, f.app_id, srcmap))
         marked = Dict{String,Any}()
@@ -242,6 +258,109 @@ function rescan!(f::Foundry, who::Principal)
     end
 end
 
+# ------------------------------------------------------------------ blast radius (typed reachability over the dependency graph)
+
+"""
+    deps_graph(f) -> Dict
+
+Nodes: every dependency that can move a fingerprint (each source artifact, the page surface,
+the authority policy, the verifier). Edges: dependency -> capabilities whose evidence would be
+invalidated. Derived from the same data the fingerprint uses, so impact and staleness agree.
+"""
+function deps_graph(f::Foundry)
+    isempty(f.deps) && app_deps!(f)
+    nodes = Dict{String,Any}()
+    add(id, kind, label) = (nodes[id] = get(nodes, id, Dict{String,Any}("id" => id, "kind" => kind, "label" => label, "dependents" => String[])))
+    add("policy", "policy", "policy/authority.json"); add("tests", "verifier", "src/verify.jl"); add("page", "page", "app page surface")
+    for id in f.store.order
+        cap = f.store.capabilities[id]
+        for r in source_refs(f, cap)
+            add("source:" * r, r == cap.candidate.action.source_ref ? "handler" : "shared", r)
+            push!(nodes["source:" * r]["dependents"], id)
+        end
+        for n in ("policy", "tests", "page"); push!(nodes[n]["dependents"], id); end
+    end
+    Dict{String,Any}("nodes" => sort!(collect(values(nodes)); by=x -> x["id"]))
+end
+
+"""
+    impact(f, change) -> Dict
+
+Answer "what would this change withdraw?" BEFORE it is applied. `change` is a node id from
+deps_graph ("source:actions/_money.jl", "policy", "tests", "page") or "pending" for
+"what a rescan would stale right now". Exposure is a pure function of state, so the answer
+is exact: affected LIVE capabilities leave the browser's registry on the next sync.
+"""
+function impact(f::Foundry, change::String)
+    live = [id for id in f.store.order if f.store.capabilities[id].state == LIVE]
+    affected = String[]
+    if change == "pending"
+        sources = app_sources(f); app_deps!(f)
+        for id in f.store.order
+            cap = f.store.capabilities[id]
+            cap.fingerprint === nothing && continue
+            fp_now = current_fingerprint(f, cap, cap.contract_hash; sources=sources)
+            stale, _ = staleness(cap.fingerprint, fp_now)
+            stale && !(cap.state in (WITHDRAWN, POLICY_BLOCKED, CANDIDATE)) && push!(affected, id)
+        end
+    else
+        g = deps_graph(f)
+        node = findfirst(n -> n["id"] == change, g["nodes"])
+        node === nothing && return Dict{String,Any}("change" => change, "known" => false, "affected" => Any[], "summary" => "unknown dependency $change")
+        affected = [id for id in g["nodes"][node]["dependents"] if f.store.capabilities[id].fingerprint !== nothing && !(f.store.capabilities[id].state in (WITHDRAWN, POLICY_BLOCKED, CANDIDATE))]
+    end
+    rows = [Dict{String,Any}("capability_id" => id, "tool" => tool_name(f, f.store.capabilities[id]), "state" => string(f.store.capabilities[id].state),
+                             "affected" => id in affected, "withdrawn" => id in affected && id in live) for id in f.store.order]
+    withdrawn = count(r -> r["withdrawn"], rows)
+    Dict{String,Any}("change" => change, "known" => true, "affected" => affected, "rows" => rows, "live" => length(live),
+        "withdrawn" => withdrawn, "survivors" => [r["tool"] for r in rows if r["state"] == "LIVE" && !r["affected"]],
+        "summary" => "this change withdraws $withdrawn of $(length(live)) live tools")
+end
+
+# ------------------------------------------------------------------ agent-visible refusals
+
+"Typed, actionable guidance for a refusal: what happened, whether retrying helps, and what would."
+function guidance(code::String, reasons::Vector{String}; capability_id::String="", state::String="")
+    g = Dict{String,Any}("code" => code, "reasons" => reasons, "capability_id" => capability_id, "state" => state, "retryable" => false)
+    if code == "INPUT_REFUSED"
+        g["retryable"] = true
+        g["next_steps"] = ["fix the listed fields and call again", "only the fields in inputSchema are agent-controlled; session-bound fields are set by the human's session"]
+    elseif code == "NOT_LIVE"
+        g["next_steps"] = state == "STALE" ? ["the capability is STALE: its dependencies changed after it was verified", "ask for fresh evidence with foundry_request_verification; a HUMAN with the required role must then promote it", "do not retry the call until the manifest lists the tool again"] :
+                          ["the capability is not exposed; foundry_get_capability shows its lifecycle state and what it needs"]
+    elseif code == "BUDGET_EXCEEDED"
+        g["retryable"] = true; g["retry_after_seconds"] = 3600
+        g["next_steps"] = ["the invocation budget for this human session is used up for the trailing hour", "wait for the window, or ask the human to act directly"]
+    elseif code in ("AUTHORITY_INSUFFICIENT", "SELF_RATIFICATION", "ROLE_MISSING")
+        g["next_steps"] = ["promotion is an authority act: a HUMAN principal with the policy's role must perform it", "agents propose and request verification; they never ratify consequential capabilities"]
+    elseif code in ("EVIDENCE_NOT_PASS", "NO_EVIDENCE", "EVIDENCE_STALE", "NOT_VERIFIED", "MUTATION_SCORE", "CHECKS_MISSING")
+        g["next_steps"] = ["evidence must be PASS and bound to the current dependency fingerprint", "request verification (foundry_request_verification) and inspect the failing check with foundry_get_capability"]
+    elseif code == "NO_SESSION"
+        g["next_steps"] = ["the page's human session was not accepted by the app; the agent acts only within a human's session"]
+    else
+        g["next_steps"] = ["inspect the capability with foundry_get_capability"]
+    end
+    g
+end
+
+"Explain the most recent refusal (any kind) recorded for a capability, or a refusal code in general."
+function explain_refusal(f::Foundry, code::String, capability_id::String)
+    last = nothing
+    for e in Iterators.reverse(f.store.events)
+        e.kind in ("INVOCATION_REFUSED", "PROMOTION_REFUSED", "CONTRACT_REFUSED", "POLICY_BLOCKED") || continue
+        (isempty(capability_id) || get(e.payload, "capability_id", "") == capability_id) || continue
+        (isempty(code) || e.payload["refusal"]["code"] == code) || continue
+        last = e; break
+    end
+    st = isempty(capability_id) || !haskey(f.store.capabilities, capability_id) ? "" : string(f.store.capabilities[capability_id].state)
+    if last === nothing
+        return Decision(true, nothing, Dict{String,Any}("found" => false, "guidance" => guidance(isempty(code) ? "UNKNOWN" : code, String[]; capability_id=capability_id, state=st)))
+    end
+    r = last.payload["refusal"]
+    Decision(true, nothing, Dict{String,Any}("found" => true, "ledger_seq" => last.seq, "at" => last.at, "kind" => last.kind, "by" => last.actor,
+        "guidance" => guidance(string(r["code"]), String[string(x) for x in r["reasons"]]; capability_id=capability_id, state=st)))
+end
+
 # ------------------------------------------------------------------ WebMCP exposure
 
 tool_name(f::Foundry, cap::Capability) = replace(cap.id, "." => "_")
@@ -254,8 +373,9 @@ function manifest(f::Foundry, app::String)
             cap = f.store.capabilities[id]
             cap.state == LIVE || continue
             k = cap.contract
+            bdesc = isempty(k.budget) ? "" : " Budget: $(get(k.budget, "max_per_hour", "?"))/h, $(get(k.budget, "max_amount_per_hour", "?")) $(get(k.budget, "amount_field", ""))/h per session."
             push!(tools, Dict{String,Any}("name" => tool_name(f, cap), "description" => k.description *
-                " Effects: $(join(string.(k.effects), ", ")). Scope: $(k.scope). Promoted by $(cap.promoted_by).",
+                " Effects: $(join(string.(k.effects), ", ")). Scope: $(k.scope). Promoted by $(cap.promoted_by)." * bdesc,
                 "inputSchema" => input_schema(k), "hash" => cap.contract_hash * "@" * string(cap.promotion_seq),
                 "capability_id" => id, "effects" => string.(k.effects), "promoted_by" => cap.promoted_by,
                 "evidence_id" => cap.evidence_id, "acceptance_input" => k.nominal_input))
@@ -280,6 +400,10 @@ function foundry_tools()
             "inputSchema" => obj(Dict{String,Any}("capability_id" => Dict("type" => "string", "maxLength" => 80)), ["capability_id"]), "hash" => "foundry@1"),
         Dict{String,Any}("name" => "foundry_promote", "description" => "Request promotion. The promotion gate applies authority policy to the CALLER: agents cannot ratify consequential capabilities.",
             "inputSchema" => obj(Dict{String,Any}("capability_id" => Dict("type" => "string", "maxLength" => 80)), ["capability_id"]), "hash" => "foundry@1"),
+        Dict{String,Any}("name" => "foundry_explain_refusal", "description" => "Explain a refusal (NOT_LIVE, INPUT_REFUSED, BUDGET_EXCEEDED, AUTHORITY_INSUFFICIENT, ...): the recorded reasons, whether retrying can help, and what would. Effects: READ.",
+            "inputSchema" => obj(Dict{String,Any}("code" => Dict("type" => "string", "maxLength" => 40), "capability_id" => Dict("type" => "string", "maxLength" => 80)), String[]), "hash" => "foundry@1"),
+        Dict{String,Any}("name" => "foundry_impact", "description" => "Blast radius: which capabilities a dependency change would invalidate and how many live tools it would withdraw. change = a dependency id from the graph, or 'pending'. Effects: READ.",
+            "inputSchema" => obj(Dict{String,Any}("change" => Dict("type" => "string", "maxLength" => 120)), ["change"]), "hash" => "foundry@1"),
     ]
 end
 
@@ -291,19 +415,28 @@ function invoke!(f::Foundry, who::Principal, name::String, input::Dict{String,An
     lock(f.lock) do
         idx = findfirst(id -> tool_name(f, f.store.capabilities[id]) == name, f.store.order)
         if idx === nothing || f.store.capabilities[f.store.order[idx]].state != LIVE
-            r = Refusal("NOT_LIVE", ["no LIVE capability named $name; exposure follows verified state"])
-            commit!(f.store, "INVOCATION_REFUSED", pid(who), Dict{String,Any}("capability_id" => idx === nothing ? "" : f.store.order[idx], "tool" => name, "by" => pid(who), "refusal" => to_dict(r)))
-            return Decision(r)
+            cid = idx === nothing ? "" : f.store.order[idx]
+            st = idx === nothing ? "" : string(f.store.capabilities[cid].state)
+            r = Refusal("NOT_LIVE", ["no LIVE capability named $name; exposure follows verified state" * (isempty(st) ? "" : " (state: $st)")])
+            commit!(f.store, "INVOCATION_REFUSED", pid(who), Dict{String,Any}("capability_id" => cid, "tool" => name, "by" => pid(who), "refusal" => to_dict(r)))
+            return Decision(false, r, Dict{String,Any}("guidance" => guidance("NOT_LIVE", r.reasons; capability_id=cid, state=st)))
         end
         cap = f.store.capabilities[f.store.order[idx]]
         st, _, body = app_get(f, "/api/me"; headers=["X-Session" => session_token])
-        st == 200 || return Decision(Refusal("NO_SESSION", ["app did not accept the human session ($st)"]))
+        st == 200 || return Decision(false, Refusal("NO_SESSION", ["app did not accept the human session ($st)"]), Dict{String,Any}("guidance" => guidance("NO_SESSION", String[]; capability_id=cap.id, state="LIVE")))
         session = Dict{String,Any}(parse_json(body))
         ok, bound, errs = bind_input(cap.contract, input, session)
         if !ok
             r = Refusal("INPUT_REFUSED", errs)
             commit!(f.store, "INVOCATION_REFUSED", pid(who), Dict{String,Any}("capability_id" => cap.id, "tool" => name, "by" => pid(who), "input" => input, "refusal" => to_dict(r)))
-            return Decision(r)
+            return Decision(false, r, Dict{String,Any}("guidance" => guidance("INPUT_REFUSED", errs; capability_id=cap.id, state="LIVE")))
+        end
+        # invocation budget: a property of the recorded history for this human session
+        bok, breasons, usage = budget_check(cap.contract.budget, f.store.events, cap.id, string(session["user_id"]), bound, Dates.now(Dates.UTC))
+        if !bok
+            r = Refusal("BUDGET_EXCEEDED", breasons)
+            commit!(f.store, "INVOCATION_REFUSED", pid(who), Dict{String,Any}("capability_id" => cap.id, "tool" => name, "by" => pid(who), "input" => input, "refusal" => to_dict(r), "usage" => usage))
+            return Decision(false, r, Dict{String,Any}("guidance" => guidance("BUDGET_EXCEEDED", breasons; capability_id=cap.id, state="LIVE"), "usage" => usage))
         end
         a = cap.candidate.action
         hdrs = ["X-Session" => session_token]
@@ -335,6 +468,10 @@ function invoke_foundry(f::Foundry, who::Principal, name::String, input::Dict{St
         return verify!(f, who, cid)
     elseif name == "foundry_promote"
         return promote!(f, who, cid)
+    elseif name == "foundry_explain_refusal"
+        return explain_refusal(f, string(get(input, "code", "")), cid)
+    elseif name == "foundry_impact"
+        return Decision(true, nothing, impact(f, string(get(input, "change", "pending"))))
     end
     Decision(Refusal("NOT_LIVE", ["unknown foundry tool $name"]))
 end
@@ -424,7 +561,11 @@ function host_acceptance(f::Foundry, app::String; since::Int=0)
             get(x, "ok", false) || (verdict = "FAIL"; push!(reasons, "executeTool($(x["tool"])) failed: $(get(x, "reason", get(x, "result", "")))"))
         end
     end
-    verdict == "PASS" && push!(reasons, "native document.modelContext; getTools() ⇔ LIVE manifest exact; $(length(execs)) execution(s) via executeTool() ok")
+    if verdict == "PASS"
+        refused = [x["tool"] * "→" * string(get(x, "gateway", "")) for x in execs if get(x, "gateway", "ok") != "ok"]
+        push!(reasons, "native document.modelContext; getTools() ⇔ LIVE manifest exact; $(length(execs)) execution(s) via executeTool() completed the native round trip" *
+              (isempty(refused) ? "" : " (gateway policy refusals on the way, as designed: $(join(refused, ", ")))"))
+    end
     Dict{String,Any}("verdict" => verdict, "reasons" => reasons, "report_seq" => ev.seq, "execution_report_seq" => xev === nothing ? 0 : xev.seq, "host" => "native",
         "user_agent" => get(r, "user_agent", ""), "expected_tools" => p["expected_tools"], "browser_tools" => get(r, "browser_tools", nothing),
         "executions" => execs, "api" => get(r, "api", nothing))
@@ -500,7 +641,7 @@ state, archives the current ledger file (nothing is deleted) and starts a fresh 
 function reset_demo!(f::Foundry, who::Principal)
     who.kind in (HUMAN, SYSTEM) || return Decision(Refusal("AUTHORITY_INSUFFICIENT", ["only a HUMAN or SYSTEM principal may reset the demonstration"]))
     lock(f.lock) do
-        for (n, v) in (("apply_adjustment", "v1"), ("transfer_funds", "v1"))
+        for (n, v) in (("apply_adjustment", "v1"), ("transfer_funds", "v1"), ("_money", "v1"))
             Http.request("POST", f.app_host, f.app_port, "/__oracle/source-version"; body=json(Dict("name" => n, "version" => v)), headers=["Content-Type" => "application/json"])
         end
         Http.request("POST", f.app_host, f.app_port, "/__oracle/reset")
@@ -537,7 +678,12 @@ function capability_summary(f::Foundry, cap::Capability)
         "evidence_verdict" => ev === nothing ? nothing : string(ev.verdict),
         "evidence_id" => cap.evidence_id, "promoted_by" => cap.promoted_by, "stale_reason" => cap.stale_reason,
         "contract_version" => k === nothing ? 0 : k.version, "hints" => cap.candidate.hints,
-        "browser" => browser_presence(f, cap))
+        "browser" => browser_presence(f, cap),
+        "budget" => k === nothing || isempty(k.budget) ? nothing : begin
+            c, a = budget_usage(f.store.events, cap.id, f.verify_session == "sess-jori" ? "jori" : "", Dates.now(Dates.UTC); amount_field=string(get(k.budget, "amount_field", "")))
+            Dict{String,Any}("declared" => k.budget, "used_count" => c, "used_amount" => a)
+        end,
+        "depends_on" => source_refs(f, cap))
 end
 
 function capability_view(f::Foundry, id::String)

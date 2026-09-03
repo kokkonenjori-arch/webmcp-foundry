@@ -107,6 +107,21 @@ the host's error in the ledger.
 | 9 | use it | `document.modelContext.executeTool()` → bridge → Foundry gateway (input re-validated, session fields bound, ledgered with `host=native`) → app; forged bound fields and out-of-contract values are refused |
 | 10 | dependency change → STALE → withdrawn → fresh evidence | source edit → rescan marks `STALE` → the bridge aborts that tool's `AbortController` → the browser's `getTools()` no longer contains it (observed natively) → re-promotion needs new evidence → re-qualified → re-registered |
 
+| 11 | blast radius across capabilities | a shared helper (`actions/_money.jl`) is a fingerprinted dependency of two capabilities; `/api/impact?change=source:actions/_money.jl` predicts "withdraws 2 of 4 live tools" **before** the change; after it, rescan stales exactly those two, the browser's `getTools()` drops exactly those two and keeps the survivors |
+
+**Agent-visible refusals.** Every gateway refusal (`NOT_LIVE`, `INPUT_REFUSED`, `BUDGET_EXCEEDED`, authority
+codes) is returned as an MCP tool error with `structuredContent`: the typed code, the concrete reasons,
+whether retrying can help (`retryable`, `retry_after_seconds`) and `next_steps`. The Foundry tool
+`foundry_explain_refusal` returns the ledgered refusal and the same guidance, and `foundry_impact`
+answers blast-radius questions, so a calling agent can adapt instead of retrying blindly.
+
+**Invocation budgets (over-broad in time).** A FINANCIAL contract must declare `budget`
+(`max_per_hour`, `max_amount_per_hour`, `amount_field`); the contract gate refuses one without it
+(`BUDGET_MISSING`). The gateway enforces the budget **from the ledger** (successful invocations per
+human session in the trailing hour), so replay reproduces it; the verifier's `budget_enforced` check
+feeds the enforcement function synthetic histories at, under and outside the window, and the
+`budget_dropped` must-kill mutant proves a budget-less FINANCIAL contract cannot PASS.
+
 **Lifecycle ⇔ browser invariant** (`/api/webmcp/invariant`): `LIVE ⇔ present in getTools()`;
 `VERIFIED`, `CANDIDATE`, `BLOCKED`, `STALE`, `WITHDRAWN` ⇒ absent. Evaluated against the
 latest native report, so the yellow STALE badge in the console corresponds to the capability
@@ -144,8 +159,10 @@ src/discovery.jl       human page → candidates (HTML form scanner; no JavaScri
 src/minimize.jl        candidate → system-proposed minimized contract (R1–R5, recorded as a diff)
 src/validate.jl        the gateway: agent input → bound app request (unknown/bound fields refused)
 src/verify.jl          external-oracle checks, observed-effect derivation, must-kill mutants → Evidence
+src/budget.jl          invocation budgets enforced from ledger history
 src/gates.jl           contract gate, policy block, promotion gate (authority + separation), staleness
-src/foundry.jl         gated operations; WebMCP manifest + gateway; host reports, acceptance, invariant
+src/foundry.jl         gated operations; WebMCP manifest + gateway; host reports, acceptance, invariant;
+                       dependency graph + impact (blast radius); refusal guidance; Foundry's own tools
 src/server.jl          JSON API, console UI, CORS
 web/webmcp-bridge.js   Foundry's client artifact: document.modelContext registration with AbortControllers,
                        getTools() reconciliation, toolchange listener, host reports, acceptance run

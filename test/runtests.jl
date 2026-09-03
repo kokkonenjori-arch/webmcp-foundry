@@ -10,6 +10,7 @@ Base.include(WebMCPFoundry, joinpath(ROOT, "demo", "app", "LedgerlyApp.jl"))
 using .WebMCPFoundry
 const W = WebMCPFoundry
 using .W.JSON, .W.Model, .W.Http
+import Dates
 import .W.Ledger, .W.Discovery, .W.Minimize, .W.Validate, .W.Gates, .W.Verify, .W.FoundryCore
 
 passed = 0; failed = String[]
@@ -222,6 +223,35 @@ acc = FoundryCore.host_acceptance(f, "ledgerly")
 check("native match + ok execution -> PASS", acc["verdict"] == "PASS")
 inv = FoundryCore.host_invariant(f, "ledgerly")
 check("invariant PASS: LIVE present, others absent", inv["verdict"] == "PASS" && all(r -> r["consistent"], inv["rows"]))
+# budgets: over-broad in time
+println("budget / impact / guidance")
+kt = Minimize.minimize(tr, rules; proposed_by="AGENT:planner")[1]
+check("FINANCIAL minimization declares a budget", kt.budget["max_per_hour"] == 10 && kt.budget["amount_field"] == "amount_cents")
+nob = Contract(kt.capability_id, kt.version, kt.description, kt.inputs, kt.effects, kt.scope, kt.scope_field, kt.invariants, kt.nominal_input, kt.proposed_by)
+check("FINANCIAL without budget refused BUDGET_MISSING", Gates.contract_gate(nob, tr, policy).refusal.code == "BUDGET_MISSING")
+mkev(i, user="jori", amt="1000") = (kind="INVOKED", at="2026-01-01T11:$(lpad(i,2,'0')):00.000Z", payload=Dict{String,Any}("capability_id" => tr.id, "session_user" => user, "status" => 201, "bound" => Dict{String,Any}("amount_cents" => amt)))
+now = Dates.DateTime(2026, 1, 1, 12)
+bnd = Dict("amount_cents" => "500")
+check("under budget allowed", W.Budget.budget_check(kt.budget, [mkev(i) for i in 1:9], tr.id, "jori", bnd, now)[1])
+check("count budget refused at limit", !W.Budget.budget_check(kt.budget, [mkev(i) for i in 1:10], tr.id, "jori", bnd, now)[1])
+check("other session's usage does not count", W.Budget.budget_check(kt.budget, [mkev(i, "sam") for i in 1:10], tr.id, "jori", bnd, now)[1])
+check("usage older than an hour does not count", W.Budget.budget_check(kt.budget, [(kind="INVOKED", at="2026-01-01T09:00:00.000Z", payload=mkev(1).payload) for i in 1:10], tr.id, "jori", bnd, now)[1])
+check("amount budget refused", !W.Budget.budget_check(kt.budget, [mkev(i, "jori", "24000") for i in 1:1], tr.id, "jori", Dict("amount_cents" => "1500"), now)[1])
+check("failed invocations do not consume budget", W.Budget.budget_check(kt.budget, [(kind="INVOKED", at=mkev(i).at, payload=merge(mkev(i).payload, Dict("status" => 422))) for i in 1:10], tr.id, "jori", bnd, now)[1])
+gb = FoundryCore.guidance("BUDGET_EXCEEDED", ["x"]; capability_id=tr.id, state="LIVE")
+check("guidance: budget refusal is retryable after an hour", gb["retryable"] && gb["retry_after_seconds"] == 3600)
+check("guidance: NOT_LIVE on STALE points at re-verification", occursin("foundry_request_verification", join(FoundryCore.guidance("NOT_LIVE", String[]; state="STALE")["next_steps"], " ")))
+check("guidance: authority refusals are not retryable", !FoundryCore.guidance("AUTHORITY_INSUFFICIENT", String[])["retryable"])
+# impact over the dependency graph (integration store)
+gd = FoundryCore.deps_graph(f)
+money = findfirst(n -> n["id"] == "source:actions/_money.jl", gd["nodes"])
+check("deps graph has the shared helper with two dependents", money !== nothing && sort(gd["nodes"][money]["dependents"]) == ["ledgerly.apply_adjustment", "ledgerly.transfer_funds"])
+imp = FoundryCore.impact(f, "source:actions/_money.jl")
+check("impact of shared helper with only search LIVE: withdraws 0 of 1", imp["withdrawn"] == 0 && imp["live"] == 1 && imp["affected"] == String[])
+impp = FoundryCore.impact(f, "policy")
+check("impact of policy change withdraws every live tool", impp["withdrawn"] == impp["live"] == 1)
+check("unknown dependency is refused, not guessed", FoundryCore.impact(f, "source:nope.jl")["known"] == false)
+check("pending impact is empty when nothing moved", isempty(FoundryCore.impact(f, "pending")["affected"]))
 check("withdraw needs a human", !FoundryCore.withdraw!(f, ag, S, "x").ok && FoundryCore.withdraw!(f, ow, S, "test").ok)
 check("after withdrawal the last native report is now inconsistent (tool still present in browser)", FoundryCore.host_invariant(f, "ledgerly")["verdict"] == "FAIL")
 check("withdrawn leaves manifest", isempty(FoundryCore.manifest(f, "ledgerly")["tools"]))

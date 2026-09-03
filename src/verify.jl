@@ -22,6 +22,8 @@ import ..Model: Contract, Candidate, FieldSpec, Evidence, CheckResult, Probe, Fi
                 EffectKind, READ, WRITE_OWN, WRITE_OTHER, FINANCIAL, EXTERNAL_SEND, DESTRUCTIVE,
                 effect_from_string, sha, to_dict, contract_hash
 import ..Validate: bind_input
+import ..Budget: budget_check
+using Dates
 
 export Target, verify_capability, observe, snapshot, TESTS_HASH
 
@@ -368,6 +370,36 @@ function check_invariants(ctx::Ctx)
     results
 end
 
+function check_budget(ctx::Ctx)
+    k = ctx.k
+    any(e -> e == FINANCIAL, k.effects) || return CheckResult("budget_enforced", PASS, "no FINANCIAL effect: no budget required", Probe[])
+    b = k.budget
+    isempty(b) && return CheckResult("budget_enforced", FAIL, "FINANCIAL contract without a budget", Probe[])
+    ok, bound, errs = bind_or_error(ctx, k.nominal_input)
+    ok || return CheckResult("budget_enforced", INVALID, "nominal does not bind", Probe[])
+    # the gateway's enforcement is a function of the LEDGER; feed it a synthetic history at the limit
+    now = DateTime(2026, 1, 1, 12)
+    mk(i) = (kind="INVOKED", at="2026-01-01T11:$(lpad(i, 2, '0')):00.000Z",
+             payload=Dict{String,Any}("capability_id" => k.capability_id, "session_user" => ctx.user, "status" => 201, "bound" => Dict{String,Any}(bound)))
+    n = Int(get(b, "max_per_hour", 0))
+    under = [mk(i) for i in 1:max(n - 1, 0)]
+    at_limit = [mk(i) for i in 1:n]
+    ok1, r1, _ = budget_check(b, under, k.capability_id, ctx.user, bound, now)
+    ok2, r2, u2 = budget_check(b, at_limit, k.capability_id, ctx.user, bound, now)
+    old = [mk(i) for i in 1:n]
+    stale = [(kind=e.kind, at="2026-01-01T09:00:00.000Z", payload=e.payload) for e in old]   # outside the window
+    ok3, _, _ = budget_check(b, stale, k.capability_id, ctx.user, bound, now)
+    af = string(get(b, "amount_field", "")); big = copy(bound); big[af] = string(Int(get(b, "max_amount_per_hour", 0)) + 1)
+    ok4, r4, _ = budget_check(b, Any[], k.capability_id, ctx.user, big, now)
+    probes = [Probe("budget:$(n-1) used", Dict{String,Any}(bound), ok1 ? 200 : 429, String["READ"], String[], "under the limit → allowed"),
+              Probe("budget:$n used", Dict{String,Any}(bound), ok2 ? 200 : 429, String["READ"], String[], join(r2, "; ")),
+              Probe("budget:window expired", Dict{String,Any}(bound), ok3 ? 200 : 429, String["READ"], String[], "usage older than an hour does not count"),
+              Probe("budget:amount over cap", Dict{String,Any}(big), ok4 ? 200 : 429, String["READ"], String[], join(r4, "; "))]
+    (ok1 && !ok2 && ok3 && !ok4) ||
+        return CheckResult("budget_enforced", FAIL, "gateway budget enforcement did not behave as declared (under=$(ok1) at-limit=$(ok2) expired=$(ok3) over-amount=$(ok4))", probes)
+    CheckResult("budget_enforced", PASS, "max $(n)/h and $(get(b, "max_amount_per_hour", "?")) $(af)/h enforced from ledger history: $(n-1) used → allowed; $n used → refused; expired window → allowed; over-amount → refused", probes)
+end
+
 # ------------------------------------------------------------------ suite
 
 "Run the whole check suite for a contract. Returns Vector{CheckResult} (never throws on app behaviour)."
@@ -385,6 +417,7 @@ function run_suite(t::Target, k::Contract, cand::Candidate)
     push!(out, check_scope(ctx, snapshot(t)))
     push!(out, check_unknown_fields(ctx))
     append!(out, check_invariants(ctx))
+    push!(out, check_budget(ctx))
     reset!(t)
     out
 end
@@ -395,9 +428,9 @@ suite_verdict(checks) = verdict_join(c.verdict for c in checks)
 
 function mutate(k::Contract, kind::String)
     if kind == "effects_underdeclared"
-        return Contract(k.capability_id, k.version, k.description, k.inputs, [READ], k.scope, k.scope_field, k.invariants, k.nominal_input, k.proposed_by)
+        return Contract(k.capability_id, k.version, k.description, k.inputs, [READ], k.scope, k.scope_field, k.invariants, k.nominal_input, k.proposed_by, k.budget)
     elseif kind == "scope_widened"
-        return Contract(k.capability_id, k.version, k.description, k.inputs, unique(vcat(k.effects, [WRITE_OTHER])), "any", k.scope_field, k.invariants, k.nominal_input, k.proposed_by)
+        return Contract(k.capability_id, k.version, k.description, k.inputs, unique(vcat(k.effects, [WRITE_OTHER])), "any", k.scope_field, k.invariants, k.nominal_input, k.proposed_by, k.budget)
     elseif kind == "nominal_out_of_contract"
         nom = copy(k.nominal_input)
         for f in agent_fields(k)
@@ -409,11 +442,13 @@ function mutate(k::Contract, kind::String)
                 nom[f.name] = "__not_an_option__"; break
             end
         end
-        return Contract(k.capability_id, k.version, k.description, k.inputs, k.effects, k.scope, k.scope_field, k.invariants, nom, k.proposed_by)
+        return Contract(k.capability_id, k.version, k.description, k.inputs, k.effects, k.scope, k.scope_field, k.invariants, nom, k.proposed_by, k.budget)
+    elseif kind == "budget_dropped"
+        return Contract(k.capability_id, k.version, k.description, k.inputs, k.effects, k.scope, k.scope_field, k.invariants, k.nominal_input, k.proposed_by, Dict{String,Any}())
     elseif startswith(kind, "constraint_dropped:")
         fname = kind[length("constraint_dropped:")+1:end]
         inputs = [f.name == fname ? FieldSpec(f.name, f.type, f.binding, f.required, Dict{String,Any}(kk => vv for (kk, vv) in f.constraints if !(kk in ("minimum", "maximum", "maxLength"))), f.origin) : f for f in k.inputs]
-        return Contract(k.capability_id, k.version, k.description, inputs, k.effects, k.scope, k.scope_field, k.invariants, k.nominal_input, k.proposed_by)
+        return Contract(k.capability_id, k.version, k.description, inputs, k.effects, k.scope, k.scope_field, k.invariants, k.nominal_input, k.proposed_by, k.budget)
     end
     error("unknown mutant $kind")
 end
@@ -424,6 +459,7 @@ function applicable_mutants(k::Contract)
     push!(must, "scope_widened")
     any(f -> (f.type == "integer" && haskey(f.constraints, "maximum")) || (f.type == "string" && haskey(f.constraints, "maxLength")) || f.type == "enum", agent_fields(k)) &&
         push!(must, "nominal_out_of_contract")
+    any(e -> e == FINANCIAL, k.effects) && push!(must, "budget_dropped")   # a FINANCIAL contract without a budget must not PASS
     info = ["constraint_dropped:$(f.name)" for f in agent_fields(k) if any(c -> haskey(f.constraints, c), ("minimum", "maximum", "maxLength"))]
     (must, info)
 end

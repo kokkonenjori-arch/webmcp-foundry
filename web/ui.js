@@ -35,7 +35,7 @@
     flow.style.display = view === 'flow' ? 'grid' : 'none';
     list.style.display = view === 'caps' ? 'block' : 'none';
     detail.style.display = view === 'flow' ? 'none' : 'block';
-    if (view === 'ledger') { list.style.display = 'none'; m.classList.add('flow'); }
+    if (view === 'ledger' || view === 'impact') { list.style.display = 'none'; m.classList.add('flow'); }
   }
 
   // ------------------------------------------------------------ capabilities list
@@ -85,6 +85,8 @@
         <div class="card"><div class="k">Promotion</div><div class="v">${s.promoted_by ? 'LIVE, promoted by ' + esc(s.promoted_by) + ' at ledger #' + c.promotion_seq : 'not promoted'}</div></div>
         <div class="card"><div class="k">Evidence</div><div class="v">${ev ? vb(ev.verdict) + ' · mutation ' + ev.mutation_score + ' · ' + esc(ev.id) : 'none'}</div></div>
         <div class="card"><div class="k">Page hints (untrusted)</div><div class="v">${esc(JSON.stringify(s.hints))}</div></div>
+        <div class="card"><div class="k">Invocation budget (per human session, trailing hour)</div><div class="v">${s.budget ? `${s.budget.used_count} / ${s.budget.declared.max_per_hour} calls · ${s.budget.used_amount} / ${s.budget.declared.max_amount_per_hour} ${esc(s.budget.declared.amount_field)}` : 'none (not FINANCIAL)'}</div></div>
+        <div class="card"><div class="k">Depends on (fingerprinted)</div><div class="v">${(s.depends_on || []).map(esc).join(' · ')} · policy · verifier · page</div></div>
       </div>`;
     h += `<h3>Discovered surface (over-broad by construction)</h3><table><tr><th>control</th><th>type</th><th>origin</th><th>constraints</th></tr>` +
       c.candidate.fields.map(f => `<tr><td>${esc(f.name)}</td><td>${f.type}</td><td>${f.origin}</td><td><code>${esc(JSON.stringify(f.constraints))}</code></td></tr>`).join('') + '</table>';
@@ -144,6 +146,22 @@
       }).join('') + '</table>';
   }
 
+  // ------------------------------------------------------------ blast radius
+  let impactChange = 'pending';
+  async function renderImpact() {
+    const [g, im] = await Promise.all([api('GET', '/api/deps'), api('GET', '/api/impact?change=' + encodeURIComponent(impactChange))]);
+    const opts = [['pending', 'pending (what a rescan would stale now)'], ...g.nodes.map(n => [n.id, `${n.kind}: ${n.label} → ${n.dependents.length} dependent(s)`])];
+    detail.innerHTML = `<h2>Blast radius — typed reachability over the dependency graph</h2>
+      <p style="color:var(--mut)">Every fingerprinted dependency is a node; its dependents are the capabilities whose evidence a change would invalidate. Ask before applying: <select id="impact-sel" style="font:inherit;background:#22282e;color:var(--ink);border:1px solid var(--line);border-radius:5px;padding:4px 8px">${opts.map(([v, l]) => `<option value="${esc(v)}" ${v === impactChange ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></p>
+      <div class="card" style="margin:10px 0"><div class="k">${esc(im.change)}</div><div class="big ${im.withdrawn ? 'warn' : 'ok'}" style="font:700 26px var(--mono);margin:6px 0">${esc(im.summary)}</div>
+        <div class="v">survivors: ${(im.survivors || []).map(esc).join(', ') || '—'}</div></div>
+      <table><tr><th>capability</th><th>tool</th><th>state</th><th>affected</th><th>would be withdrawn from the browser</th></tr>` +
+      (im.rows || []).map(r => `<tr><td>${esc(r.capability_id)}</td><td><code>${esc(r.tool)}</code></td><td>${badge(r.state)}</td><td>${r.affected ? '<b class="v-FAIL">yes</b>' : 'no'}</td><td>${r.withdrawn ? '<b class="v-FAIL">YES</b>' : '—'}</td></tr>`).join('') + `</table>
+      <h3>Dependency graph</h3><table><tr><th>node</th><th>kind</th><th>dependents</th></tr>` +
+      g.nodes.map(n => `<tr><td><code>${esc(n.label)}</code></td><td>${n.kind}</td><td>${n.dependents.map(esc).join(', ')}</td></tr>`).join('') + '</table>';
+    $('#impact-sel').onchange = e => { impactChange = e.target.value; renderImpact(); };
+  }
+
   // ------------------------------------------------------------ judge flow
   const S = { search: 'ledgerly.search_transactions', adj: 'ledgerly.apply_adjustment', tr: 'ledgerly.transfer_funds' };
   const steps = [
@@ -155,6 +173,8 @@
     { n: '5', title: 'Authority — agent refused, member refused, owner promotes; native tool appears', run: stepAuthority },
     { n: '6', title: 'Source change — LIVE → STALE; native tool disappears', run: stepStale },
     { n: '7', title: 'Re-qualify — fresh evidence, owner re-promotes; tool returns', run: stepRequalify },
+    { n: '8', title: 'Blast radius — one shared helper changes; two of four live tools vanish, two survive', run: stepBlast },
+    { n: '9', title: 'Re-qualify the affected pair; the browser regains exactly those two', run: stepRequalifyPair },
   ];
   let stepDone = -1, running = false;
   let momentHtml = `<h2>Judge flow</h2><div class="lines">Open Ledgerly in a WebMCP-enabled browser tab (link in the header), then press Reset and run the steps in order.\nEach step waits for the browser's own getTools() report where it matters, so the registry card below is never ahead of the ledger.</div>`;
@@ -235,12 +255,21 @@
     await progress('Authority', ['evidence ' + v.detail.evidence.verdict, 'AGENT promotion: ' + refusal(pa), 'MEMBER promotion: ' + refusal(pm), 'owner promoting…']);
     const po = await api('POST', `/api/capabilities/${S.tr}/promote`, {}, OWNER);
     const b = await waitBrowser(x => has(x, 'ledgerly_transfer_funds'), 30);
+    // over-broad in time: the gateway enforces the contract's budget from the ledger
+    let budgetLine = '';
+    try {
+      const call = () => fetch('/api/webmcp/call/ledgerly_transfer_funds', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Foundry-Token': 'tok-agent-browser', 'X-Foundry-Session': 'sess-jori' }, body: JSON.stringify({ input: { to_account: 'A3', amount_cents: 100, memo: 'budget probe' } }) }).then(r => r.json());
+      let last = null, n = 0;
+      for (let i = 0; i < 12; i++) { last = await call(); n++; if (!last.ok) break; }
+      budgetLine = last && !last.ok ? `budget: call ${n} REFUSED ${refusal(last)} — ${reasons(last)[0]} (retryable after ${last.detail.guidance.retry_after_seconds}s)` : 'budget: not reached';
+    } catch (e) { budgetLine = 'budget probe error: ' + e.message; }
     await moment('Authority', pa.ok ? 'AGENT PROMOTED (unexpected)' : refusal(pa), pa.ok ? 'fail' : 'ok', [
       'evidence: ' + v.detail.evidence.verdict + ' (conservation, nonnegative balance, mutation score ' + v.detail.evidence.mutation_score + ')',
       'AGENT requests promotion → ' + refusal(pa) + ': ' + reasons(pa).join('; '),
       'HUMAN member → ' + refusal(pm),
       'HUMAN owner (≠ proposer) → ' + (po.ok ? 'LIVE' : refusal(po)),
-      b ? `✔ NATIVE: document.modelContext.getTools() now contains ledgerly_transfer_funds (${b.report.user_agent.split(') ').pop()})` : '… native registration not observed (is Ledgerly open in a WebMCP-enabled tab?)']);
+      b ? `✔ NATIVE: document.modelContext.getTools() now contains ledgerly_transfer_funds (${b.report.user_agent.split(') ').pop()})` : '… native registration not observed (is Ledgerly open in a WebMCP-enabled tab?)',
+      budgetLine]);
   }
   async function stepStale() {
     await progress('Source change', ['editing transfer_funds.jl (v2)…', 'rescanning…']);
@@ -267,6 +296,43 @@
       b ? '✔ NATIVE: tool re-registered; getTools() contains ledgerly_transfer_funds again' : '… not observed',
       `ledger: chain ${lv.chain_ok ? 'intact' : 'BROKEN'} · replay ${lv.replay_matches ? 'reproduces the live digest' : 'MISMATCH'}`,
       '', 'Agents propose. Evidence qualifies. Authority promotes.']);
+  }
+
+  async function stepBlast() {
+    const N = 'ledgerly.add_note', A = 'ledgerly.apply_adjustment';
+    await progress('Blast radius', ['promoting add_note and apply_adjustment (owner) so four tools are live…']);
+    for (const id of [N, A]) {
+      const c = await api('GET', `/api/capabilities/${id}`);
+      if (!c.contract) await api('POST', `/api/capabilities/${id}/contract`, { mode: 'minimize' }, AGENT);
+      if (c.state !== 'VERIFIED' && c.state !== 'LIVE') await api('POST', `/api/capabilities/${id}/verify`, {}, AGENT);
+      if (c.state !== 'LIVE') await api('POST', `/api/capabilities/${id}/promote`, {}, OWNER);
+    }
+    const b4 = await waitBrowser(x => x.matches_at_receipt === true && (x.report.browser_tools || []).length === 4, 30);
+    const pre = await api('GET', '/api/impact?change=' + encodeURIComponent('source:actions/_money.jl'));
+    await progress('Blast radius', [`browser registry: ${b4 ? '4 tools present (native)' : 'not confirmed'}`, `impact preview for actions/_money.jl: ${pre.summary}`, 'applying the shared change + rescan…']);
+    await api('POST', '/api/demo/source', { name: '_money', version: 'v2' }, AGENT);
+    const rs = await api('POST', '/api/rescan', {}, AGENT);
+    const gone = await waitBrowser(x => x.matches_at_receipt === true && (x.report.browser_tools || []).length === 2 && !(x.report.browser_tools || []).includes('ledgerly_transfer_funds'), 30);
+    const inv = await api('GET', '/api/webmcp/invariant?app=ledgerly');
+    await moment('Blast radius', pre.summary, 'warn', [
+      'change: actions/_money.jl (shared by apply_adjustment and transfer_funds)',
+      'predicted before applying: ' + pre.summary + ' · survivors: ' + (pre.survivors || []).join(', '),
+      'rescan staled: ' + Object.keys(rs.detail.stale || {}).join(', '),
+      gone ? '✔ NATIVE: getTools() now holds exactly ' + (gone.report.browser_tools || []).join(', ') : '… browser withdrawal not observed',
+      'lifecycle ⇔ getTools() invariant: ' + inv.verdict]);
+  }
+  async function stepRequalifyPair() {
+    await progress('Re-qualify pair', ['fresh evidence for apply_adjustment and transfer_funds…']);
+    const out = [];
+    for (const id of ['ledgerly.apply_adjustment', 'ledgerly.transfer_funds']) {
+      const v = await api('POST', `/api/capabilities/${id}/verify`, {}, AGENT);
+      const p = await api('POST', `/api/capabilities/${id}/promote`, {}, OWNER);
+      out.push(`${id.replace('ledgerly.', '')}: evidence ${v.detail.evidence.verdict} → ${p.ok ? 'LIVE' : refusal(p)}`);
+    }
+    const back = await waitBrowser(x => x.matches_at_receipt === true && (x.report.browser_tools || []).length === 4, 30);
+    const lv = await api('GET', '/api/ledger/verify');
+    await moment('Re-qualify pair', back ? '4 / 4 LIVE' : refusal({}), 'ok', [...out, back ? '✔ NATIVE: both tools re-registered; getTools() holds four again' : '… not observed',
+      `ledger: chain ${lv.chain_ok ? 'intact' : 'BROKEN'} · replay ${lv.replay_matches ? 'reproduces the live digest' : 'MISMATCH'}`, '', 'Agents propose. Evidence qualifies. Authority promotes.']);
   }
 
   async function runStep(i) {
@@ -303,6 +369,7 @@
     await refreshList();
     if (view === 'flow') return renderFlow();
     if (view === 'ledger') return renderLedger();
+    if (view === 'impact') return renderImpact();
     return renderDetail();
   }
   window.F = {

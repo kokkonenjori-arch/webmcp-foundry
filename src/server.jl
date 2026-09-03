@@ -10,7 +10,7 @@ import ..Ledger
 import ..FoundryCore
 import ..FoundryCore: Foundry, principal_from_token, discover!, propose_contract!, verify!, promote!, withdraw!,
                       rescan!, manifest, invoke!, capability_view, status, anonymous, host_report!, host_acceptance, latest_host_report, host_invariant,
-                      health, public_urls, reset_demo!, demo_source!
+                      health, public_urls, reset_demo!, demo_source!, impact, deps_graph
 
 export start!, WEB_DIR
 
@@ -55,6 +55,10 @@ function route(f::Foundry, req::Request)
         return reply(h["ok"] ? 200 : 503, h)
     elseif p == "/api/public"
         return reply(200, public_urls(f))
+    elseif p == "/api/impact"
+        return reply(200, impact(f, get(req.query, "change", "pending")))
+    elseif p == "/api/deps"
+        return reply(200, deps_graph(f))
     elseif p == "/api/demo/reset" && req.method == "POST"
         return reply(reset_demo!(f, principal(f, req)))
     elseif p == "/api/demo/source" && req.method == "POST"

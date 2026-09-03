@@ -12,10 +12,7 @@ function handle_apply_adjustment(st::AppState, user::String, input::Dict{String,
     haskey(st.accounts, account) || return (404, Dict("error" => "unknown account"))
     st.accounts[account]["balance_cents"] + amount >= 0 || return (422, Dict("error" => "adjustment would overdraw the account"))
     # BUG (v1): missing ownership check — see apply_adjustment.v2.jl for the repair
-    st.accounts[account]["balance_cents"] += amount
-    t = Dict{String,Any}("id" => newid!(st, "T"), "account" => account, "amount_cents" => amount,
-                         "memo" => "adjustment: " * String(reason), "kind" => amount > 0 ? "credit" : "debit")
-    push!(st.transactions, t)
+    t = apply_delta!(st, account, amount, "adjustment: " * String(reason))
     push!(st.audit, "$user adjusted $account by $amount")
     (201, Dict("transaction" => t, "balance_cents" => st.accounts[account]["balance_cents"]))
 end

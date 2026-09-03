@@ -16,12 +16,14 @@
     "scope_field_pattern": "(^|_)(account_id|from_account)($|_)",
     "max_agent_fields": 4,
     "require_constraints": true,
-    "max_string_length": 280
+    "max_string_length": 280,
+    "default_max_per_hour": 10,
+    "default_max_amount_per_hour": 25000
   },
   "evidence": {
     "require_mutation_score": 1.0,
     "required_checks": ["oracle_available", "unauthenticated_refused", "nominal_within_bound",
                         "constraint_boundary", "scope_adversarial", "unknown_fields_rejected",
-                        "invariant:no_effect_on_rejection", "invariant:hidden_not_agent"]
+                        "invariant:no_effect_on_rejection", "invariant:hidden_not_agent", "budget_enforced"]
   }
 }

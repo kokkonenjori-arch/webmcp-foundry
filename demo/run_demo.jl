@@ -79,7 +79,7 @@ end
 
 # ------------------------------------------------------------------ boot
 
-copy_source("apply_adjustment", "v1"); copy_source("transfer_funds", "v1")   # known starting point
+copy_source("apply_adjustment", "v1"); copy_source("transfer_funds", "v1"); copy_source("_money", "v1")   # known starting point
 if !attach
     global f, srv, appsrv = W.boot(; foundry_port=FPORT, app_port=APORT, ledger_path=joinpath(ROOT, "data", "ledger.jsonl"),
                                    fresh=true, app_module=W.LedgerlyApp)
@@ -219,6 +219,22 @@ must(!r["ok"] && refusal(r) == "INPUT_REFUSED", "attempt to control the session-
 st, r = api("POST", "/api/webmcp/call/ledgerly_transfer_funds"; token="tok-agent-browser", session="sess-jori",
             body=Dict("input" => Dict("to_account" => "A3", "amount_cents" => 999999, "memo" => "too much")))
 must(!r["ok"] && refusal(r) == "INPUT_REFUSED", "out-of-contract amount REFUSED at the gateway: $(join(reasons(r), "; "))")
+must(haskey(r["detail"], "guidance") && r["detail"]["guidance"]["retryable"] == true && !isempty(r["detail"]["guidance"]["next_steps"]),
+     "refusal carries agent guidance: retryable=$(r["detail"]["guidance"]["retryable"]) · $(r["detail"]["guidance"]["next_steps"][1])")
+# over-broad in TIME: the contract's budget is enforced by the gateway from the ledger
+kb = cap(Tr)["contract"]["budget"]
+must(kb["max_per_hour"] > 0 && kb["max_amount_per_hour"] > 0 && kb["amount_field"] == "amount_cents", "contract declares a budget: $(kb["max_per_hour"]) calls/h, $(kb["max_amount_per_hour"]) $(kb["amount_field"])/h per session")
+nref = 0; last = nothing
+for i in 1:kb["max_per_hour"] + 1
+    st, rr = api("POST", "/api/webmcp/call/ledgerly_transfer_funds"; token="tok-agent-browser", session="sess-jori",
+                 body=Dict("input" => Dict("to_account" => "A3", "amount_cents" => 10, "memo" => "budget probe $i")))
+    global last = rr
+    rr["ok"] || (global nref = i; break)
+end
+must(last !== nothing && !last["ok"] && refusal(last) == "BUDGET_EXCEEDED", "gateway refused call #$nref with BUDGET_EXCEEDED: $(last === nothing ? "" : join(reasons(last), "; "))")
+must(last !== nothing && get(get(last["detail"], "guidance", Dict()), "retry_after_seconds", 0) == 3600, "agent guidance: retry after 3600 s")
+st, r = api("POST", "/api/webmcp/call/foundry_explain_refusal"; token="tok-agent-browser", body=Dict("input" => Dict("code" => "BUDGET_EXCEEDED", "capability_id" => Tr)))
+must(r["ok"] && r["detail"]["found"] && r["detail"]["guidance"]["code"] == "BUDGET_EXCEEDED", "foundry_explain_refusal finds the ledgered refusal (#$(r["detail"]["ledger_seq"])) and explains it")
 
 # ------------------------------------------------------------------ 10. stale invalidation
 step(10, "detect a dependency change, mark STALE, withdraw, require fresh evidence")
@@ -246,6 +262,44 @@ must(r["ok"] && "ledgerly_transfer_funds" in manifest_names(), "re-qualified and
 p10b = wait_native(p -> p["matches_at_receipt"] === true && browser_has(p, "ledgerly_transfer_funds"))
 must(p10b !== nothing, "NATIVE host: tool re-registered; getTools() contains ledgerly_transfer_funds again")
 
+# ------------------------------------------------------------------ 11. blast radius across capabilities
+step(11, "blast radius — a shared helper changes; exactly its dependents are withdrawn")
+N = "ledgerly.add_note"; A = "ledgerly.apply_adjustment"
+for (id, needs_contract) in ((N, true), (A, false))
+    c = cap(id)
+    c["contract"] === nothing && api("POST", "/api/capabilities/$id/contract"; token=AGENT, body=Dict("mode" => "minimize"))
+    c["state"] in ("VERIFIED", "LIVE") || api("POST", "/api/capabilities/$id/verify"; token=AGENT)
+    c["state"] == "LIVE" || api("POST", "/api/capabilities/$id/promote"; token=OWNER)
+end
+live_now = sort(manifest_names())
+must(length(live_now) == 4, "four tools LIVE: $(join(live_now, ", "))")
+p11 = wait_native(p -> p["matches_at_receipt"] === true && length(p["report"]["browser_tools"]) == 4)
+must(p11 !== nothing, "NATIVE host: getTools() holds all four")
+st, g = api("GET", "/api/deps")
+money = findfirst(n -> n["id"] == "source:actions/_money.jl", g["nodes"])
+must(money !== nothing && sort(String[string(x) for x in g["nodes"][money]["dependents"]]) == [A, Tr], "dependency graph: actions/_money.jl is shared by exactly apply_adjustment and transfer_funds")
+st, pre = api("GET", "/api/impact?change=source:actions/_money.jl")
+must(pre["withdrawn"] == 2 && pre["live"] == 4 && sort(String[string(x) for x in pre["survivors"]]) == ["ledgerly_add_note", "ledgerly_search_transactions"],
+     "impact BEFORE applying: $(pre["summary"]); survivors $(join(pre["survivors"], ", "))")
+st, pol = api("GET", "/api/impact?change=policy")
+must(pol["withdrawn"] == 4, "for comparison, a policy change: $(pol["summary"])")
+set_source("_money", "v2")
+st, pend = api("GET", "/api/impact?change=pending")
+must(sort(String[string(x) for x in pend["affected"]]) == [A, Tr], "pending impact (fingerprints moved, nothing applied yet): $(pend["summary"])")
+st, r = api("POST", "/api/rescan"; token=AGENT)
+must(sort(collect(keys(r["detail"]["stale"]))) == [A, Tr], "rescan staled exactly the dependents: $(join(sort(collect(keys(r["detail"]["stale"]))), ", "))")
+must(sort(manifest_names()) == ["ledgerly_add_note", "ledgerly_search_transactions"], "manifest keeps the two survivors")
+p11b = wait_native(p -> p["matches_at_receipt"] === true && sort(String[string(x) for x in p["report"]["browser_tools"]]) == ["ledgerly_add_note", "ledgerly_search_transactions"])
+must(p11b !== nothing, "NATIVE host: two tools vanished from getTools(), two survived (ledger #$(host_status()["seq"]))")
+st, inv = api("GET", "/api/webmcp/invariant?app=ledgerly")
+must(inv["verdict"] == "PASS", "lifecycle ⇔ getTools() invariant PASS across all six")
+for id in (A, Tr)
+    st, r = api("POST", "/api/capabilities/$id/verify"; token=AGENT)
+    st, r = api("POST", "/api/capabilities/$id/promote"; token=OWNER)
+end
+p11c = wait_native(p -> p["matches_at_receipt"] === true && length(p["report"]["browser_tools"]) == 4)
+must(p11c !== nothing, "re-qualified both against the new helper; NATIVE host holds four tools again")
+
 # ------------------------------------------------------------------ extras: forbidden & ungradable
 step("+", "refusals for the other effect classes")
 st, r = api("POST", "/api/capabilities/ledgerly.delete_account/contract"; token=AGENT, body=Dict("mode" => "minimize"))
@@ -256,11 +310,13 @@ st, r = api("POST", "/api/capabilities/ledgerly.share_report/verify"; token=AGEN
 must(r["detail"]["evidence"]["verdict"] == "UNGRADABLE", "share_report: evidence UNGRADABLE (delivery is unobservable) — uncertainty is not PASS")
 st, r = api("POST", "/api/capabilities/ledgerly.share_report/promote"; token=OWNER)
 must(!r["ok"], "share_report: promotion refused ($(refusal(r)))")
+st, r = api("POST", "/api/capabilities/ledgerly.add_note/withdraw"; token=OWNER, body=Dict("reason" => "extras check"))
 st, r = api("POST", "/api/capabilities/ledgerly.add_note/contract"; token=AGENT, body=Dict("mode" => "minimize"))
 st, r = api("POST", "/api/capabilities/ledgerly.add_note/verify"; token=AGENT)
 must(r["detail"]["evidence"]["verdict"] == "PASS", "add_note (WRITE_OWN): evidence PASS")
 st, r = api("POST", "/api/capabilities/ledgerly.add_note/promote"; token=AGENT)
 must(!r["ok"] && refusal(r) == "AUTHORITY_INSUFFICIENT", "add_note: agent promotion refused (WRITE_OWN needs a HUMAN)")
+st, r = api("POST", "/api/capabilities/ledgerly.add_note/promote"; token=OWNER)
 
 # ------------------------------------------------------------------ ledger integrity
 step("=", "deterministic evidence and promotion history")
@@ -279,7 +335,7 @@ else
     say("FAILED STEPS:"); for x in failures; say("   ✘ $x"); end
 end
 open(joinpath(ROOT, "data", "demo-transcript.md"), "w") do io; write(io, String(take!(T))); end
-browser_proc === nothing || (try kill(browser_proc) catch end)
+browser_proc === nothing || (try kill(browser_proc) catch end); kill_browser!()
 # the app is left as the demo left it (both handlers at v2, consistent with the ledger's bound fingerprints)
 if !attach && !keep
     W.Http.stop!(srv); W.LedgerlyApp.stop!()

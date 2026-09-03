@@ -99,7 +99,7 @@ st, inv = api("GET", "/api/webmcp/invariant?app=ledgerly&since=$since")
 println("
 LIFECYCLE ⇔ getTools() INVARIANT: $(inv["verdict"])")
 for r in get(inv, "rows", []); println("  $(rpad(r["tool"], 32)) $(rpad(r["state"], 10)) expected=$(r["expected"]) browser=$(r["browser"]) $(r["consistent"] ? "✔" : "✘")"); end
-proc === nothing || (try kill(proc) catch end)
+proc === nothing || (try kill(proc) catch end); kill_browser!()
 if !attach
     W.Http.stop!(srv); W.LedgerlyApp.stop!()
 end

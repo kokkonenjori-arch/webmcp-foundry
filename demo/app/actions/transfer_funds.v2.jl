@@ -15,11 +15,8 @@ function handle_transfer_funds(st::AppState, user::String, input::Dict{String,St
     from == to && return (422, Dict("error" => "source and destination must differ"))
     st.accounts[from]["owner"] == user || return (403, Dict("error" => "not your account"))
     st.accounts[from]["balance_cents"] >= amount || return (422, Dict("error" => "insufficient funds"))
-    st.accounts[from]["balance_cents"] -= amount
-    st.accounts[to]["balance_cents"] += amount
-    t1 = Dict{String,Any}("id" => newid!(st, "T"), "account" => from, "amount_cents" => -amount, "memo" => "transfer to $to: $memo", "kind" => "debit")
-    t2 = Dict{String,Any}("id" => newid!(st, "T"), "account" => to, "amount_cents" => amount, "memo" => "transfer from $from: $memo", "kind" => "credit")
-    push!(st.transactions, t1); push!(st.transactions, t2)
+    t1 = apply_delta!(st, from, -amount, "transfer to $to: $memo")
+    t2 = apply_delta!(st, to, amount, "transfer from $from: $memo")
     push!(st.audit, "$user transferred $amount from $from to $to ($memo)")
     (201, Dict("debit" => t1, "credit" => t2, "from_balance_cents" => st.accounts[from]["balance_cents"]))
 end

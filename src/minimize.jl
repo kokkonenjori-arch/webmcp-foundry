@@ -100,8 +100,16 @@ function minimize(c::Candidate, rules::Dict{String,Any}; proposed_by::String="SY
     for inv in split(get(c.hints, "invariants", ""), ','; keepempty=false)
         push!(invariants, String(strip(inv)))
     end
+    budget = Dict{String,Any}()
+    if any(e -> string(e) == "FINANCIAL", effects)
+        # R6: money moves under a budget. Defaults come from policy; the amount field is the agent-bound integer.
+        af = findfirst(f -> f.binding == AGENT_BOUND && f.type == "integer", fields)
+        budget = Dict{String,Any}("max_per_hour" => get(rules, "default_max_per_hour", 10),
+                                  "max_amount_per_hour" => get(rules, "default_max_amount_per_hour", 25000),
+                                  "amount_field" => af === nothing ? "" : fields[af].name)
+    end
     contract = Contract(c.id, version, "Minimized contract for $(c.title) ($(c.action.method) $(c.action.path))",
-        fields, effects, scope, scope_field, unique(invariants), nominal, proposed_by)
+        fields, effects, scope, scope_field, unique(invariants), nominal, proposed_by, budget)
     contract, notes
 end
 

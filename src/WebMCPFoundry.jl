@@ -7,6 +7,7 @@
 #   discovery      : human surface -> candidates (over-broad by construction)
 #   minimize       : candidate -> minimized contract proposal (system plane)
 #   validate       : agent input -> bound app input (the only crossing)
+#   budget         : invocation budgets enforced from the ledger
 #   verify         : external-oracle checks + mutants -> evidence (system plane)
 #   gates          : deterministic decisions (contract / policy / promotion / stale)
 #   foundry        : gated operations over the store
@@ -21,12 +22,13 @@ include("ledger.jl")
 include("discovery.jl")
 include("minimize.jl")
 include("validate.jl")
+include("budget.jl")
 include("verify.jl")
 include("gates.jl")
 include("foundry.jl")
 include("server.jl")
 
-using .JSON, .Http, .Model, .Ledger, .Discovery, .Minimize, .Validate, .Verify, .Gates, .FoundryCore, .Server
+using .JSON, .Http, .Model, .Ledger, .Discovery, .Minimize, .Validate, .Budget, .Verify, .Gates, .FoundryCore, .Server
 
 const ROOT = normpath(joinpath(@__DIR__, ".."))
 

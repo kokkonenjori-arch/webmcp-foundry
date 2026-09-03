@@ -61,9 +61,13 @@
           const txt = typeof out === 'string' ? out : JSON.stringify(out);
           let parsed = null; try { parsed = JSON.parse(txt); } catch (e) {}
           // the bridge's execute() wraps the gateway reply as MCP content; unwrap it
-          let inner = parsed && parsed.content && parsed.content[0] ? JSON.parse(parsed.content[0].text) : parsed;
-          x.ok = !!(inner && inner.ok); x.status = inner && inner.detail ? inner.detail.status : null;
-          if (!x.ok) x.reason = inner && inner.refusal ? inner.refusal.code + ': ' + (inner.refusal.reasons || []).join('; ') : txt.slice(0, 200);
+          const sc = parsed && parsed.structuredContent;
+          // the native round trip is complete once the host's executeTool() reached the gateway and a
+          // typed answer came back; a policy refusal on the way (budget spent) is a correct outcome, not a failure
+          x.native_round_trip = !!sc;
+          x.gateway = sc && sc.refused ? sc.code : (sc ? 'ok' : 'no structured response');
+          x.ok = !!(sc && (!sc.refused || sc.code === 'BUDGET_EXCEEDED')); x.status = sc ? sc.status : null;
+          if (!x.ok) x.reason = sc && sc.refused ? sc.code + ': ' + (sc.reasons || []).join('; ') : txt.slice(0, 200);
         }
       } catch (e) { x.reason = e.message; }
       executions.push(x);
@@ -101,7 +105,19 @@
         });
         const j = await r.json();
         if (window.ledgerlyRefresh) window.ledgerlyRefresh();
-        return { content: [{ type: 'text', text: JSON.stringify(j) }], isError: !j.ok };
+        if (j.ok) return { content: [{ type: 'text', text: JSON.stringify(j.detail) }], structuredContent: j.detail, isError: false };
+        // Agent-visible refusal (MCP tool error): a typed code, the concrete reasons, and what would
+        // change the outcome — so a calling agent can adapt instead of retrying blindly.
+        const g = (j.detail && j.detail.guidance) || {};
+        const code = j.refusal ? j.refusal.code : 'REFUSED';
+        const reasons = j.refusal ? j.refusal.reasons : [];
+        const text = `REFUSED ${code}: ${reasons.join('; ')}` +
+          (g.next_steps ? `\nnext: ${g.next_steps.join(' | ')}` : '') +
+          (g.retryable ? `\nretryable: yes${g.retry_after_seconds ? ' after ' + g.retry_after_seconds + 's' : ''}` : '\nretryable: no') +
+          `\nexplain: call foundry_explain_refusal({code: "${code}", capability_id: "${g.capability_id || ''}"})`;
+        return { content: [{ type: 'text', text }], isError: true,
+                 structuredContent: { refused: true, code, reasons, capability_id: g.capability_id || null, state: g.state || null,
+                                      retryable: !!g.retryable, retry_after_seconds: g.retry_after_seconds || null, next_steps: g.next_steps || [], usage: j.detail && j.detail.usage || null } };
       },
     };
   }

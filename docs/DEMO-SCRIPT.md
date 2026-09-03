@@ -25,6 +25,13 @@ app state re-seeded, both handlers at v1).
 | 2:45 | **7 Re-qualify** | Fresh evidence PASS, owner re-promotes, the tool reappears. |
 | 3:00 | close | *Agents propose. Evidence qualifies. Authority promotes.* |
 
+Encore, if there is time (steps 8–9): **Blast radius.** Four tools are live; the Blast radius tab
+predicts that editing the shared helper `actions/_money.jl` "withdraws 2 of 4 live tools" and
+names the survivors; the change is applied; the browser's `getTools()` drops exactly
+`apply_adjustment` and `transfer_funds` and keeps `search_transactions` and `add_note`; both are
+re-qualified and return. Step 5 also shows the invocation budget: the eleventh transfer in the
+hour is refused `BUDGET_EXCEEDED` with agent guidance (retry after 3600 s).
+
 Measured on the public deployment (Edge 152 native, tunnel latency included): step 3 ≈ 21 s,
 step 4 ≈ 27 s, step 5 ≈ 40 s, step 6 ≈ 29 s, step 7 ≈ 32 s; steps R–2 ≈ 45 s together. The whole
 flow runs in about four minutes of wall clock; the verification waits (adversarial probes +

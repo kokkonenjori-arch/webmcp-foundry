@@ -27,6 +27,10 @@ const APP_DIR = @__DIR__
 const ACTIONS_DIR = joinpath(APP_DIR, "actions")
 const ACTION_NAMES = ["search_transactions", "add_note", "apply_adjustment", "transfer_funds",
                       "delete_account", "share_report"]
+const SHARED = ["_money"]                        # shared helpers, loaded before the handlers
+const SOURCE_FILES = vcat(SHARED, ACTION_NAMES)
+# which source artifacts each action depends on (the app declares this; Foundry fingerprints the set)
+const DEPS = Dict("apply_adjustment" => ["_money"], "transfer_funds" => ["_money"])
 
 mutable struct AppState
     accounts::Dict{String,Dict{String,Any}}
@@ -63,7 +67,7 @@ newid!(st::AppState, prefix) = (id = "$prefix$(st.next_id)"; st.next_id += 1; id
 
 "Load (or re-load) every handler file. Handlers are `handle_<name>(state, user, input)`."
 function load_actions!()
-    for n in ACTION_NAMES
+    for n in SOURCE_FILES
         path = joinpath(ACTIONS_DIR, n * ".jl")
         # the demo swaps versioned handlers in and out; a fresh clone starts from v1
         isfile(path) || cp(joinpath(ACTIONS_DIR, n * ".v1.jl"), path)
@@ -73,7 +77,8 @@ function load_actions!()
 end
 
 source_digest(name) = "sha256:" * bytes2hex(sha256(read(joinpath(ACTIONS_DIR, name * ".jl"))))
-sources() = Dict{String,Any}("actions/$n.jl" => source_digest(n) for n in ACTION_NAMES)
+sources() = Dict{String,Any}("actions/$n.jl" => source_digest(n) for n in SOURCE_FILES)
+deps() = Dict{String,Any}("actions/$n.jl" => vcat(["actions/$n.jl"], ["actions/$d.jl" for d in get(DEPS, n, String[])]) for n in ACTION_NAMES)
 
 # ------------------------------------------------------------------ oracle snapshot
 
@@ -159,6 +164,8 @@ function handle(req::Request)
             load_actions!(); return json_response(200, json(Dict("ok" => true, "sources" => sources())))
         elseif sub == "sources"
             return json_response(200, canonical(sources()))
+        elseif sub == "deps"
+            return json_response(200, canonical(deps()))
         elseif sub == "config" && req.method == "POST"
             # the public origin of Foundry can change at runtime (tunnel rotation); the supervisor updates it here
             d = parse_json(String(copy(req.body)))
@@ -168,7 +175,7 @@ function handle(req::Request)
             # simulate a developer commit: swap a handler between its versioned sources and hot-reload
             d = parse_json(String(copy(req.body)))
             name = String(get(d, "name", "")); ver = String(get(d, "version", ""))
-            name in ACTION_NAMES || return json_response(404, json(Dict("error" => "unknown action")))
+            name in SOURCE_FILES || return json_response(404, json(Dict("error" => "unknown source")))
             src = joinpath(ACTIONS_DIR, "$name.$ver.jl")
             isfile(src) || return json_response(404, json(Dict("error" => "unknown version $ver for $name")))
             cp(src, joinpath(ACTIONS_DIR, name * ".jl"); force=true)
@@ -176,7 +183,7 @@ function handle(req::Request)
             return json_response(200, json(Dict("ok" => true, "name" => name, "version" => ver, "digest" => source_digest(name))))
         elseif startswith(sub, "source/")
             n = sub[length("source/")+1:end]
-            n in ACTION_NAMES || return text_response(404, "no such action")
+            n in SOURCE_FILES || return text_response(404, "no such source")
             return text_response(200, read(joinpath(ACTIONS_DIR, n * ".jl"), String))
         end
     end

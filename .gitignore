@@ -8,3 +8,4 @@ demo/app/actions/transfer_funds.jl
 media/frames/
 media/frames.json
 media/key-*.png
+demo/app/actions/_money.jl

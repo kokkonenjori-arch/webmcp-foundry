@@ -21,7 +21,7 @@ export contract_gate, policy_block, promotion_gate, required_authority, stalenes
 const REFUSAL_CODES = ["OVER_BROAD", "UNCONSTRAINED", "NOT_AGENT_EXPOSABLE", "SCOPE_UNDECLARED",
     "INVARIANTS_MISSING", "EFFECT_FORBIDDEN", "NO_EVIDENCE", "EVIDENCE_NOT_PASS", "EVIDENCE_STALE",
     "AUTHORITY_INSUFFICIENT", "SELF_RATIFICATION", "ROLE_MISSING", "NOT_VERIFIED", "MUTATION_SCORE",
-    "CHECKS_MISSING", "PROPOSER_NOT_ALLOWED", "SCHEMA_INVALID"]
+    "CHECKS_MISSING", "PROPOSER_NOT_ALLOWED", "SCHEMA_INVALID", "BUDGET_MISSING", "BUDGET_EXCEEDED", "NOT_LIVE", "INPUT_REFUSED"]
 
 max_effect(effects::Vector{EffectKind}) = isempty(effects) ? nothing : effects[argmax(effect_rank.(effects))]
 sh(s::AbstractString) = s[min(8, end):min(end, 19)]   # short hash for messages
@@ -67,6 +67,14 @@ function contract_gate(k::Contract, cand::Candidate, policy::Dict{String,Any})
     end
     if me !== nothing && string(me) == "FINANCIAL"
         "nonnegative_balance" in k.invariants || push_reason!("INVARIANTS_MISSING", "FINANCIAL contract must declare invariant 'nonnegative_balance'")
+        b = k.budget
+        if !(get(b, "max_per_hour", 0) isa Integer && get(b, "max_per_hour", 0) > 0)
+            push_reason!("BUDGET_MISSING", "FINANCIAL contract must declare a positive budget.max_per_hour (over-broad in time)")
+        end
+        af = string(get(b, "amount_field", ""))
+        if isempty(af) || !any(f -> f.name == af && f.binding == AGENT_BOUND && f.type == "integer", k.inputs) || !(get(b, "max_amount_per_hour", 0) isa Integer && get(b, "max_amount_per_hour", 0) > 0)
+            push_reason!("BUDGET_MISSING", "FINANCIAL contract must bound the agent-controlled amount field per hour (budget.amount_field + budget.max_amount_per_hour)")
+        end
     end
     "no_effect_on_rejection" in k.invariants || push_reason!("INVARIANTS_MISSING", "every contract must declare 'no_effect_on_rejection'")
     isempty(reasons) ? Decision(true) : Decision(Refusal(code, reasons))

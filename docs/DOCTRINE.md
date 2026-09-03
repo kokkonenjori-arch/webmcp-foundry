@@ -126,10 +126,29 @@ Evidence binds to `Fingerprint(source, schema, policy, tests, contract)`:
 * `tests` — hash of the verifier source;
 * `contract` — hash of the accepted contract.
 
-`rescan` recomputes the fingerprint; any moved component marks the capability `STALE`: its
-evidence is detached, its promotion cleared, it leaves the manifest, the gateway refuses
-`NOT_LIVE`, and re-promotion requires fresh evidence *and* a fresh authority act. Old
+`source` covers the capability's **whole dependency set**: the app declares which source
+artifacts each action depends on (`/__oracle/deps`), and shared helpers are fingerprinted with
+the handler. `rescan` recomputes the fingerprint; any moved component marks the capability
+`STALE`: its evidence is detached, its promotion cleared, it leaves the manifest, the gateway
+refuses `NOT_LIVE`, and re-promotion requires fresh evidence *and* a fresh authority act. Old
 evidence records remain in the ledger, visibly detached.
+
+**Blast radius (typed reachability, SMF).** The dependency graph (`/api/deps`) has one node per
+fingerprinted dependency (each source artifact, the page surface, the policy, the verifier) with
+its dependents. `impact(change)` answers "what would this change invalidate, and how many live
+tools would leave the browser" **before** the change is applied, from the same data the
+fingerprint uses, so prediction and staleness agree; `impact("pending")` reports what a rescan
+would stale right now. A shared-helper change withdraws exactly its dependents and nothing else.
+
+**Budgets (over-broad in time).** A FINANCIAL contract declares `budget` (`max_per_hour`,
+`max_amount_per_hour`, `amount_field`); the gate refuses one without it. The gateway enforces
+it from ledger history for the invoking human session, so it is replayable; the verifier probes
+the enforcement function with synthetic histories and a must-kill `budget_dropped` mutant.
+
+**Agent-visible refusals.** Refusals are returned to the calling agent as MCP tool errors with
+`structuredContent` (code, reasons, retryable, retry_after_seconds, next_steps) and can be
+re-explained with `foundry_explain_refusal`; Foundry is a participant in the agent loop, not
+only a gate.
 
 ## 8. Ledger
 

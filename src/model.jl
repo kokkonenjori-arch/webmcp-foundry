@@ -130,12 +130,14 @@ struct Contract
     invariants::Vector{String}   # e.g. "conservation", "nonnegative_balance", "no_effect_on_rejection"
     nominal_input::Dict{String,Any}   # a known-good agent input used by the verifier
     proposed_by::String          # principal id string "AGENT:planner"
+    budget::Dict{String,Any}     # invocation budget (max_per_hour, max_amount_per_hour, amount_field); empty = none
 end
+Contract(id, v, d, i, e, s, sf, inv, n, p) = Contract(id, v, d, i, e, s, sf, inv, n, p, Dict{String,Any}())
 function to_dict(c::Contract)
     Dict{String,Any}("capability_id" => c.capability_id, "version" => c.version, "description" => c.description,
         "inputs" => [to_dict(f) for f in c.inputs], "effects" => [string(e) for e in c.effects],
         "scope" => c.scope, "scope_field" => c.scope_field, "invariants" => c.invariants,
-        "nominal_input" => c.nominal_input, "proposed_by" => c.proposed_by)
+        "nominal_input" => c.nominal_input, "proposed_by" => c.proposed_by, "budget" => c.budget)
 end
 function contract_from_dict(d::Dict{String,Any})
     effs = EffectKind[]
@@ -148,7 +150,8 @@ function contract_from_dict(d::Dict{String,Any})
         [fieldspec_from_dict(Dict{String,Any}(f)) for f in get(d, "inputs", Any[])],
         effs, get(d, "scope", "none"), get(d, "scope_field", ""),
         String[string(x) for x in get(d, "invariants", Any[])],
-        Dict{String,Any}(get(d, "nominal_input", Dict{String,Any}())), get(d, "proposed_by", "unknown"))
+        Dict{String,Any}(get(d, "nominal_input", Dict{String,Any}())), get(d, "proposed_by", "unknown"),
+        Dict{String,Any}(get(d, "budget", Dict{String,Any}())))
 end
 contract_hash(c::Contract) = sha(canonical(to_dict(c)))
 
