@@ -20,7 +20,7 @@
 <main>
   <h1>WebMCP Foundry</h1>
   <p class="doc">Agents propose. Evidence qualifies. Authority promotes.</p>
-  <p>This page is the <b>stable entry point</b>. It always links to the currently live deployment (updated automatically by the supervisor).</p>
+  <p>This page is the <b>stable entry point</b>. Primary backend: Google Cloud (e2-micro, Caddy automatic HTTPS, systemd). If it is ever unreachable, a supervised workstation fallback is listed below.</p>
   <a class="btn" id="foundry" href="#"><b>Open the Foundry console</b><span>…</span><div class="st" id="fst">checking…</div></a>
   <a class="btn" id="app" href="#"><b>Open Ledgerly (the app whose page registers WebMCP tools)</b><span>…</span><div class="st" id="ast">checking…</div></a>
   <div class="st" id="updated"></div>
@@ -44,7 +44,7 @@
   try {
     const live = await (await fetch('live.json?ts=' + Date.now(), { cache: 'no-store' })).json();
     set('foundry', live.foundry); set('app', live.app);
-    document.getElementById('updated').textContent = 'live.json updated ' + live.updated + ' · mode ' + live.mode;
+    document.getElementById('updated').textContent = 'live.json updated ' + live.updated + ' · mode ' + live.mode + (live.fallback ? ' · fallback: ' + live.fallback.foundry + ' / ' + live.fallback.app : '');
     probe('fst', live.foundry); probe('ast', live.app);
   } catch (e) { document.getElementById('updated').textContent = 'live.json unavailable: ' + e.message; }
 })();
