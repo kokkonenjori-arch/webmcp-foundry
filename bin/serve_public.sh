@@ -78,12 +78,17 @@ push_app_config() {   # the app page must fetch the manifest from the CURRENT pu
   curl -s -m 5 -X POST -H 'Content-Type: application/json' -d "{\"foundry_url\":\"${TURL[foundry]}\"}" "http://127.0.0.1:$APORT/__oracle/config" > /dev/null
 }
 publish_pages() {     # update live.json on the gh-pages branch (stable entry page reads it)
-  # when a permanent backend (GCP) is primary, the workstation is only a fallback and must not republish
-  if [ -f data/pages-primary.txt ] && [ "$(cat data/pages-primary.txt)" != "workstation" ]; then log "entry page owned by $(cat data/pages-primary.txt); not republishing"; return 0; fi
   [ -n "$PAGES_REPO" ] || return 0
   command -v gh > /dev/null || { log "gh not available; entry page not updated"; return 0; }
   local now; now=$(date -u +%FT%TZ)
   local json="{\"foundry\":\"${TURL[foundry]}\",\"app\":\"${TURL[app]}\",\"updated\":\"$now\",\"mode\":\"supervised-tunnel\"}"
+  # when a permanent backend (GCP) is primary, the workstation only refreshes the FALLBACK fields of live.json
+  if [ -f data/pages-primary.txt ] && [ "$(cat data/pages-primary.txt)" != "workstation" ]; then
+    local cur; cur=$(gh api "repos/$PAGES_REPO/contents/live.json?ref=gh-pages" -q .content 2>/dev/null | base64 -d 2>/dev/null)
+    [ -n "$cur" ] || { log "entry page owned by $(cat data/pages-primary.txt); could not read live.json"; return 0; }
+    json=$(printf '%s' "$cur" | python -c "import json,sys; d=json.load(sys.stdin); d['fallback']={'foundry':sys.argv[1],'app':sys.argv[2],'mode':'supervised-tunnel','updated':sys.argv[3]}; print(json.dumps(d))" "${TURL[foundry]}" "${TURL[app]}" "$now")
+    log "entry page owned by $(cat data/pages-primary.txt); refreshing fallback only"
+  fi
   local sha; sha=$(gh api "repos/$PAGES_REPO/contents/live.json?ref=gh-pages" -q .sha 2>/dev/null || true)
   local content; content=$(printf '%s' "$json" | base64 | tr -d '\n')
   if [ -n "$sha" ]; then
