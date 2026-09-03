@@ -78,6 +78,8 @@ push_app_config() {   # the app page must fetch the manifest from the CURRENT pu
   curl -s -m 5 -X POST -H 'Content-Type: application/json' -d "{\"foundry_url\":\"${TURL[foundry]}\"}" "http://127.0.0.1:$APORT/__oracle/config" > /dev/null
 }
 publish_pages() {     # update live.json on the gh-pages branch (stable entry page reads it)
+  # when a permanent backend (GCP) is primary, the workstation is only a fallback and must not republish
+  if [ -f data/pages-primary.txt ] && [ "$(cat data/pages-primary.txt)" != "workstation" ]; then log "entry page owned by $(cat data/pages-primary.txt); not republishing"; return 0; fi
   [ -n "$PAGES_REPO" ] || return 0
   command -v gh > /dev/null || { log "gh not available; entry page not updated"; return 0; }
   local now; now=$(date -u +%FT%TZ)

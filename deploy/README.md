@@ -1,6 +1,25 @@
 # Stable deployment
 
-Two modes.
+**Current primary judging backend (Google Cloud, free-tier e2-micro, us-central1):**
+
+* Foundry console: https://foundry.136.111.215.133.nip.io
+* Ledgerly app: https://ledgerly.136.111.215.133.nip.io
+
+Topology: `public HTTPS (Caddy, Let's Encrypt, nip.io names on a static IP) → Foundry :8090 / Ledgerly :8091
+(one systemd-managed Julia process, Restart=always, enabled at boot)`. The ledger and runtime state live in
+`/opt/webmcp-foundry/data` on the boot disk. Provisioning is one idempotent script:
+
+```bash
+gcloud compute scp deploy/gcp-provision.sh webmcp-foundry:/tmp/provision.sh --zone us-central1-a
+gcloud compute ssh webmcp-foundry --zone us-central1-a -- bash /tmp/provision.sh foundry.<ip>.nip.io ledgerly.<ip>.nip.io main
+```
+
+To drive the cloud pair with the test drivers from a workstation, forward the two ports over SSH and set
+`FPORT`/`APORT` (`gcloud compute ssh webmcp-foundry --zone us-central1-a -- -N -L 18090:127.0.0.1:8090 -L 18091:127.0.0.1:8091`,
+then `FPORT=18090 APORT=18091 WEBMCP_PAGE=https://ledgerly.<ip>.nip.io/ julia test/acceptance_native.jl --attach`).
+The browser side always uses the public HTTPS origin, so WebMCP's secure-context requirement holds.
+
+Three modes.
 
 **A. VPS with fixed hostnames (recommended for judging).** Needs any Linux host with Docker and
 ports 80/443, plus two DNS names. Caddy obtains TLS certificates automatically.

@@ -22,10 +22,15 @@ License: MIT. Standard library only (Sockets, SHA, Dates); nothing to install be
 
 ## Live
 
-**Stable entry page: https://kokkonenjori-arch.github.io/webmcp-foundry/** — always links to the
-currently live Foundry console and Ledgerly app (the supervisor republishes it when an origin
-changes). The console's **Judge flow** tab runs the demonstration below step by step; see
-[docs/DEMO-SCRIPT.md](docs/DEMO-SCRIPT.md) for the three-minute path.
+**Stable entry page: https://kokkonenjori-arch.github.io/webmcp-foundry/** — links to the primary
+deployment on Google Cloud (Caddy + systemd, automatic HTTPS):
+
+* Foundry console: https://foundry.136.111.215.133.nip.io
+* Ledgerly app: https://ledgerly.136.111.215.133.nip.io
+
+The console's **Judge flow** tab runs the demonstration below step by step; see
+[docs/DEMO-SCRIPT.md](docs/DEMO-SCRIPT.md) for the three-minute path and
+[deploy/README.md](deploy/README.md) for the deployment.
 
 ## Try it locally
 

@@ -72,14 +72,15 @@ function wait_native(pred; timeout=45)
     nothing
 end
 browser_has(p, name) = get(p["report"], "browser_tools", nothing) !== nothing && name in String[string(x) for x in p["report"]["browser_tools"]]
+# a "developer commit": switch a handler between its versioned sources ON THE APP (works for a remote pair too)
 function set_source(name, version)
-    copy_source(name, version)
-    app("POST", "/__oracle/reload")
+    st, _, body = app("POST", "/__oracle/source-version"; body=Dict("name" => name, "version" => version))
+    st == 200 || error("source switch failed: $st $body")
 end
 
 # ------------------------------------------------------------------ boot
 
-copy_source("apply_adjustment", "v1"); copy_source("transfer_funds", "v1"); copy_source("_money", "v1")   # known starting point
+attach || (copy_source("apply_adjustment", "v1"); copy_source("transfer_funds", "v1"); copy_source("_money", "v1"))   # local boot: known starting point (attach mode resets server-side)
 if !attach
     global f, srv, appsrv = W.boot(; foundry_port=FPORT, app_port=APORT, ledger_path=joinpath(ROOT, "data", "ledger.jsonl"),
                                    fresh=true, app_module=W.LedgerlyApp)
