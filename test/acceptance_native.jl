@@ -28,7 +28,7 @@ const W = WebMCPFoundry
 import .W.JSON: json, parse_json
 import .W.Http: request
 
-const FPORT = 8090; const APORT = 8091
+const FPORT = parse(Int, get(ENV, "FPORT", "8090")); const APORT = parse(Int, get(ENV, "APORT", "8091"))   # override to drive a remote pair through an ssh port-forward
 attach = "--attach" in ARGS
 
 function api(method, path; body=nothing, token="")
